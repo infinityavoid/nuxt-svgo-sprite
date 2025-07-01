@@ -1,0 +1,42 @@
+{
+  "name": "nuxt-svgo-sprite",
+  "version": "0.0.1",
+  "description": "Nuxt 3 module for generating SVG sprites",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/types.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/module.mjs",
+      "require": "./dist/module.cjs"
+    },
+    "./plugin": {
+      "import": "./dist/runtime/plugin.mjs",
+      "require": "./dist/runtime/plugin.cjs"
+    }
+  },
+  "scripts": {
+    "dev": "nuxi dev ./playground",
+    "build": "nuxi build",
+    "prepack": "npm run build",
+    "test": "echo \"No tests specified\""
+  },
+  "dependencies": {
+    "@nuxt/kit": "^3.0.0",
+    "svgo": "^3.0.2"
+  },
+  "devDependencies": {
+    "nuxi": "^3.25.1",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">= 16.0.0"
+  }
+}
