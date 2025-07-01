@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "target": "ESNext",
+    "lib": [
+      "ESNext",
+      "DOM"
+    ],
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "jsx": "preserve",
+    "jsxImportSource": "vue",
+    "types": ["node"]
+  },
+  "include": [
+    "./modules/**/*.ts",
+    "./modules/**/*.vue",
+    "./playground/**/*.ts",
+    "./playground/**/*.vue"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
