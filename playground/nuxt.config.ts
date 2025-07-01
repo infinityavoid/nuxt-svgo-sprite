@@ -21,10 +21,11 @@ export default defineNuxtConfig({
           name: 'preset-default',
           params: {
             overrides: {
-              removeViewBox: false,
+              // removeViewBox: false, // Удалите эту строку
             },
           },
         },
+        'removeViewBox', // Добавьте removeViewBox как отдельный плагин
       ],
     },
   },

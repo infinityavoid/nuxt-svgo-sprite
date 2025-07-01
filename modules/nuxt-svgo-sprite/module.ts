@@ -1,4 +1,4 @@
-import { defineNuxtModule, addPlugin, createResolver, useNuxt } from '@nuxt/kit';
+import { defineNuxtModule, addPlugin, createResolver } from '@nuxt/kit';
 import defu from 'defu';
 import { join, resolve } from 'path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -42,11 +42,6 @@ export default defineNuxtModule({
     if (!existsSync(outputDirPath)) {
       await mkdir(outputDirPath, { recursive: true });
     }
-
-    // Hook build:before to process SVGs
-    nuxt.hook('build:before', async () => {
-      await processSVGs(moduleOptions, nuxt, inputDirPath, outputDirPath);
-    });
 
     // Watch for file changes (if watch is enabled)
     if (moduleOptions.watch) {
