@@ -7,20 +7,11 @@ const __dirname = dirname(__filename);
 
 export default defineNuxtConfig({
   modules: [
-    resolve(__dirname, '../src/module.ts')
+    resolve(__dirname, '../src/module')
   ],
-  devtools: false,
-  svgoSprite: {
-    inputDir: 'assets/icons', // Укажите путь к вашим иконкам
-    spriteName: 'custom-sprite',
-    watch: true,
-    svgoConfig: {
-      plugins: [
-        {
-          name: 'preset-default'
-        },
-        'removeViewBox', // Добавьте removeViewBox как отдельный плагин
-      ]
-    }
-  }
+  svgSprite: {
+    inputDir: 'assets/icons',
+    svgoOptions: {},
+    spriteOptions: {}
+  },
 });

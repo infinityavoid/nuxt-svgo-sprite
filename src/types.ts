@@ -1,6 +1,5 @@
-export interface ModuleOptionsType {
+export interface ModuleOptions {
   inputDir: string;
-  spriteName: string;
-  svgoConfig?: any;
-  watch?: boolean; // Добавлено: опция для включения/выключения watch
+  svgoOptions?: any;
+  spriteOptions?: any;
 }
