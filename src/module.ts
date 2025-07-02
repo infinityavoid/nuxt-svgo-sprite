@@ -1,20 +1,26 @@
 import {
   defineNuxtModule,
-  addVitePlugin,
-  extendWebpackConfig,
   createResolver,
-  addComponentsDir,
+  addVitePlugin,
   addComponent,
-  addTemplate,
-} from '@nuxt/kit'
+    addTemplate
+} from '@nuxt/kit';
 import { optimize } from 'svgo';
 import { promises as fs } from 'fs';
 import path from 'path';
 import SVGSpriter from 'svg-sprite';
-import { ModuleOptions } from './types';
 
+function hashCode(str) {
+  let hash = 0;
+  for (let i = 0, len = str.length; i < len; i++) {
+    const chr = str.charCodeAt(i);
+    hash = (hash << 5) - hash + chr;
+    hash |= 0;
+  }
+  return hash;
+}
 
-export default defineNuxtModule<ModuleOptions>({
+export default defineNuxtModule({
   meta: {
     name: 'nuxt-svgo-sprite',
     configKey: 'svgSprite'
@@ -22,91 +28,88 @@ export default defineNuxtModule<ModuleOptions>({
   defaults: {
     inputDir: 'svg',
     svgoOptions: {},
-    spriteOptions: {}
+    spriteOptions: {},
+    componentName: 'SvgSprite' // Имя компонента для спрайта
   },
   async setup(options, nuxt) {
-    const resolver = createResolver(import.meta.url)
-
-    const svgUseComponentName = 'SvgUse';
-    const svgSpriteComponentName = 'SvgSprite';
+    const resolver = createResolver(import.meta.url);
 
     // 1. Add components
     addComponent({
-      name: svgUseComponentName,
-      filePath: resolver.resolve('runtime/components/SvgUse.vue'),
+      name: 'SvgUse',
+      filePath: resolver.resolve('runtime/components/SvgUse.vue'), // Предполагается, что этот компонент существует
       global: true
-    })
+    });
 
-    // 2. Transpile runtime directory
-    nuxt.options.build.transpile.push(resolver.resolve('runtime'))
+    // Prepare sprite
+    const inputDir = path.resolve(nuxt.options.srcDir, options.inputDir);
 
-    // 4. Hook to generate sprite before build
-    nuxt.hook('build:before', async () => {
-      const inputDir = path.resolve(nuxt.options.srcDir, options.inputDir);
+    try {
+      await fs.access(inputDir);
+    } catch (e) {
+      console.warn(`[nuxt-svgo-sprite] Input directory "${inputDir}" does not exist. Skipping sprite generation.`);
+      return;
+    }
 
-      try {
-        await fs.access(inputDir);
-      } catch (e) {
-        console.warn(`[nuxt-svgo-sprite] Input directory "${inputDir}" does not exist. Skipping sprite generation.`);
-        return
-      }
+    const files = await fs.readdir(inputDir);
 
-      const files = await fs.readdir(inputDir);
-
-      const spriter = new SVGSpriter({
-        mode: {
-          symbol: {
-            render: {
-              css: false,
-              scss: false
-            },
-            example: false
-          }
+    const spriter = new SVGSpriter({
+      mode: {
+        symbol: {
+          render: {
+            css: false,
+            scss: false
+          },
+          example: false
         },
         ...options.spriteOptions
-      });
+      },
+      svg: {
+        xmlDeclaration: false
+      },
+    });
 
-      for (const file of files) {
-        if (file.endsWith('.svg')) {
-          const filePath = path.join(inputDir, file);
-          const content = await fs.readFile(filePath, 'utf-8');
-          const optimized = optimize(content, { path: filePath, ...options.svgoOptions }).data;
-          spriter.add(filePath, null, optimized);
-        }
+    for (const file of files) {
+      if (file.endsWith('.svg')) {
+        const filePath = path.join(inputDir, file);
+        const content = await fs.readFile(filePath, 'utf-8');
+        const optimized = optimize(content, { path: filePath, ...options.svgoOptions }).data;
+        spriter.add(filePath, null, optimized);
       }
+    }
 
-      await new Promise((resolve, reject) => {
-        spriter.compile(async (error, result) => {
-          if (error) {
-            console.error(error);
-            reject(error);
-          } else {
-            let spriteContent = '';
+    const { result } = await spriter.compileAsync();
+    let spriteContent = '';
 
-            for (let mode in result) {
-              for (let resource in result[mode]) {
-                spriteContent = result[mode][resource].contents.toString();
-              }
-            }
+    for (let mode in result) {
+      for (let resource in result[mode]) {
+        spriteContent = result[mode][resource].contents.toString();
+      }
+    }
 
-            // Define the component file path in the components directory
-            const componentFilePath = path.join(componentsDir, `${svgSpriteComponentName}.vue`);
+    // 2. Create a template file using addTemplate
+    const templateResult = addTemplate({
+      filename: `components/${options.componentName}.vue`,
+      getContents: () =>`<template>${spriteContent}</template>`,
+    });
+    console.log(templateResult)
 
-            // Write the component file
-            await fs.writeFile(componentFilePath, `<template>${spriteContent}</template>`);
+    // 3. Add component using components:extend hook
+    nuxt.hook('components:extend', (components) => {
+      const componentName = options.componentName;
+      const kebabName = componentName.replace(/([A-Z])/g, '-$1').toLowerCase();
+      const pascalName = componentName.charAt(0).toUpperCase() + componentName.slice(1);
 
-            addComponent({
-              name: svgSpriteComponentName,
-              filePath: componentFilePath,
-              global: true
-            });
-
-            console.log(`[nuxt-svgo-sprite] Component created at: ${componentFilePath}`);
-            console.log('[nuxt-svgo-sprite] SVG sprite generated successfully!');
-            resolve();
-          }
-        });
+      components.push({
+        name: componentName,
+        pascalName: pascalName,
+        kebabName: kebabName,
+        export: 'default',
+        filePath: templateResult.dst, // Use the path from addTemplate
+        global: true,
       });
-    })
+    });
+
+    console.log('[nuxt-svgo-sprite] SVG sprite component registered successfully!');
   }
-})
+});

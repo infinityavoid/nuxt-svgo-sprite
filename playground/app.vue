@@ -1,6 +1,6 @@
 <template>
   <div>
-    <SvgSprite/>
+    <SvgSprite />
     <SvgUse symbol="complex" width="24" height="24" svgClass="my-icon-class" />
     <SvgUse symbol="nested" width="32" height="32" />
     <SvgUse symbol="no-viewbox" width="32" height="32" />
