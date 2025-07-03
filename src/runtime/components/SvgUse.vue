@@ -1,5 +1,5 @@
 <template>
-  <svg :class="svgClass" :style="svgStyle" :width="width" :height="height" :aria-hidden="ariaHidden">
+  <svg :class="svgClass" :width="width" :height="height" :aria-hidden="ariaHidden">
     <use :xlink:href="symbolId" />
   </svg>
 </template>
@@ -19,21 +19,18 @@ export interface Props {
   /**
    * Style to apply to the svg.
    */
-  svgStyle?: object;
-  /**
-   * Width of the svg.
-   */
   width?: string | number;
   /**
    * Height of the svg.
    */
   height?: string | number;
-
-  ariaHidden?: boolean
+  /**
+   * Hides the svg from assistive technologies.
+   */
+  ariaHidden?: boolean;
 }
 
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
-const symbolId = computed(() => `#${props.symbol}`)
-
+const symbolId = computed(() => `#${props.symbol}`);
 </script>

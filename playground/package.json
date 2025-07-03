@@ -5,6 +5,7 @@
   "dependencies": {
     "@nuxt/kit": "^3.4.0",
     "mini-svg-data-uri": "^1.4.4",
+    "nuxt-svgo-sprite": "file:..",
     "svgo": "3.3.2"
   },
   "scripts": {
