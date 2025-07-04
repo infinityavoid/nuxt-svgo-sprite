@@ -8,7 +8,9 @@ import {
 import { optimize } from 'svgo';
 import { promises as fs } from 'fs';
 import path from 'path';
-import SVGSpriter from 'svg-sprite';
+import { type SpriteGeneratorOptions, svgSpriteGenerator } from './loaders/spriteGenerator'
+import { type SVGoptimizeOptions, svgOptimize } from "./loaders/svgOptimize";
+import SVGSprite, { Config } from 'svg-sprite';
 
 function hashCode(str) {
   let hash = 0;
@@ -20,60 +22,80 @@ function hashCode(str) {
   return hash;
 }
 
-export default defineNuxtModule({
+export const defaultSvgoConfig: svgoConfig = {
+  plugins: [
+    {
+      name: 'preset-default'
+    },
+    'removeDimensions',
+    {
+      name: 'prefixIds',
+      params: {
+        prefix(_, info) {
+          return 'i' + hashCode(info.path)
+        },
+      },
+    },
+  ],
+}
+
+export const defaultSpriteConfig: SpriteConfig = {
+  mode: {
+    symbol: {
+      render: {
+        css: false,
+        scss: false,
+      },
+      example: false,
+    },
+  },
+  svg: {
+    xmlDeclaration: false,
+  }
+}
+
+export type ModuleOptions = SvgLoaderOptions & SvgSpriteLoaderOptions
+
+const nuxtSvgoSpriter: NuxtModule<ModuleOptions> = defineNuxtModule({
   meta: {
     name: 'nuxt-svgo-sprite',
-    configKey: 'svgSprite'
+    configKey: 'svgSprite',
+    compatibility: {
+      // Add -rc.0 due to issue described in https://github.com/nuxt/framework/issues/6699
+      nuxt: '>=3.0.0-rc.0',
+    },
   },
   defaults: {
-    inputDir: 'svg',
-    svgoOptions: {},
-    spriteOptions: {},
-    componentName: 'SvgSprite' // Имя компонента для спрайта
+    inputDir: './assets/icons',
+    svgoOptions: undefined,
+    spriteOptions: undefined
   },
   async setup(options, nuxt) {
-    const resolver = createResolver(import.meta.url);
-
-    // 1. Add components
-    addComponent({
-      name: 'SvgUse',
-      filePath: resolver.resolve('runtime/components/SvgUse.vue'), // Предполагается, что этот компонент существует
-      global: true
-    });
-
-    // Prepare sprite
-    const inputDir = path.resolve(nuxt.options.srcDir, options.inputDir);
-
+    const { resolvePath, resolve } = createResolver(import.meta.url)
+    const appDir = nuxt.options.srcDir || nuxt.options.rootDir
+    const iconPath = appDir + options.inputDir
     try {
-      await fs.access(inputDir);
+      await fs.access(iconPath);
     } catch (e) {
-      console.warn(`[nuxt-svgo-sprite] Input directory "${inputDir}" does not exist. Skipping sprite generation.`);
+      console.warn(`[nuxt-svgo-sprite] Input directory "${iconPath}" does not exist. Skipping sprite generation.`);
       return;
     }
-
-    const files = await fs.readdir(inputDir);
-
-    const spriter = new SVGSpriter({
-      mode: {
-        symbol: {
-          render: {
-            css: false,
-            scss: false
-          },
-          example: false
-        },
-        ...options.spriteOptions
-      },
-      svg: {
-        xmlDeclaration: false
-      },
+    // 1. Add components
+    addComponent({
+      name: 'svgUse',
+      filePath: resolve('./runtime/components/svgUse.vue')
     });
+    // optimizing svg files
+
+    const files = await fs.readdir(iconPath);
+
+    const spriter = new SVGSprite(options.spriteOptions || defaultSpriteConfig);
 
     for (const file of files) {
       if (file.endsWith('.svg')) {
-        const filePath = path.join(inputDir, file);
+        const filePath = path.join(iconPath, file);
         const content = await fs.readFile(filePath, 'utf-8');
-        const optimized = optimize(content, { path: filePath, ...options.svgoOptions }).data;
+        const optimized = optimize(content, { path: filePath, ...options.svgoOptions || defaultSvgoConfig }).data;
         spriter.add(filePath, null, optimized);
       }
     }
@@ -86,30 +108,23 @@ export default defineNuxtModule({
         spriteContent = result[mode][resource].contents.toString();
       }
     }
+    console.log(spriteContent)
 
     // 2. Create a template file using addTemplate
     const templateResult = addTemplate({
-      filename: `components/${options.componentName}.vue`,
+      filename: `components/svgSprite.vue`,
       getContents: () =>`<template>${spriteContent}</template>`,
     });
-    console.log(templateResult)
+    console.log(templateResult.getContents())
 
-    // 3. Add component using components:extend hook
-    nuxt.hook('components:extend', (components) => {
-      const componentName = options.componentName;
-      const kebabName = componentName.replace(/([A-Z])/g, '-$1').toLowerCase();
-      const pascalName = componentName.charAt(0).toUpperCase() + componentName.slice(1);
-
-      components.push({
-        name: componentName,
-        pascalName: pascalName,
-        kebabName: kebabName,
-        export: 'default',
-        filePath: templateResult.dst, // Use the path from addTemplate
-        global: true,
-      });
+    // 1. Add components
+    addComponent({
+      name: 'svgSprite',
+      filePath: resolve('./runtime/components/svgSprite.vue')
     });
 
     console.log('[nuxt-svgo-sprite] SVG sprite component registered successfully!');
   }
 });
+
+export default nuxtSvgoSpriter
