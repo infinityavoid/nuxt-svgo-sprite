@@ -14,7 +14,7 @@ export async function svgSpriteLoader(options: SvgSpriteLoaderOptions) {
     const inputDirPath = path.resolve(process.cwd(), options.inputDir);
     const outputDirPath = path.dirname(path.resolve(process.cwd(), spriteOutputPath));
     const absoluteSpriteOutputPath = path.resolve(process.cwd(), spriteOutputPath);
-
+    console.log(inputDirPath)
     try {
         await fs.promises.access(inputDirPath);
     } catch (e) {

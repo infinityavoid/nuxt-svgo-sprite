@@ -4,6 +4,7 @@ export default defineNuxtConfig({
   svgoSpriter: {
     inputDir:'/assets/icons',
     global: false,
-    autoImportPath: './assets/icons/'
+    autoImportPath: './assets/icons/',
+    spriteOutputPath: './assets/output/'
   }
 })
