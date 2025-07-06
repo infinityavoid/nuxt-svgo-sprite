@@ -1,7 +1,15 @@
 <template>
   <div>
     <SvgSprite />
-    <SvgUse symbol="complex" width="24" height="24" svgClass="my-icon-class" />
+    <div>
+      <SvgUse symbol="complex" width="24" height="24"/>
+      <SvgUse symbol="nested" width="32" height="32" />
+      <SvgUse symbol="no-viewbox" width="32" height="32" />
+      <SvgUse symbol="test" width="32" height="32" />
+      <SvgUse symbol="with-attributes" width="32" height="32" />
+      <SvgUse symbol="with-id" width="32" height="32" />
+    </div>
+    <SvgUse symbol="complex" width="24" height="24"/>
     <SvgUse symbol="nested" width="32" height="32" />
     <SvgUse symbol="no-viewbox" width="32" height="32" />
     <SvgUse symbol="test" width="32" height="32" />
