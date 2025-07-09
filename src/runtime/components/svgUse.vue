@@ -1,12 +1,10 @@
 <template>
-  <svg :class="svgClass" :style="svgStyle" :width="width" :height="height" :aria-hidden="ariaHidden">
-    <use :xlink:href="symbolId" />
+  <svg :class="svgClass" :width="width" :height="height" :aria-hidden="ariaHidden">
+    <use :href="'#' + symbol" />
   </svg>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
-
 export interface Props {
   /**
    * The id of the symbol to use from the sprite.
@@ -31,9 +29,5 @@ export interface Props {
 
   ariaHidden?: boolean
 }
-
-const props = defineProps<Props>()
-
-const symbolId = computed(() => `#${props.symbol}`)
-
+defineProps<Props>()
 </script>

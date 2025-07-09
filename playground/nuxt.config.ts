@@ -2,6 +2,7 @@ export default defineNuxtConfig({
   modules: ['nuxt-svgo-sprite'],
   devtools: { enabled: false },
   svgSprite: {
-    inputDir:'/assets/icons'
+    inputDir:'/assets/icons',
+    createUseComponents: true
   }
 })
