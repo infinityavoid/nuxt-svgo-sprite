@@ -2,7 +2,6 @@
   <div>
     <SvgSprite />
     <div>
-      <Usecomplex :width="400"/>
       <SvgUse symbol="complex" width="24" height="24"/>
       <SvgUse symbol="nested" width="32" height="32" />
       <SvgUse symbol="no-viewbox" width="32" height="32" />
