@@ -1,5 +1,5 @@
 <template>
-  <svg :class="svgClass" :width="width" :height="height" :aria-hidden="ariaHidden">
+  <svg :class="svgClass">
     <use :href="'#' + symbol" />
   </svg>
 </template>
@@ -14,20 +14,6 @@ export interface Props {
    * Css class(es) to apply to the svg.
    */
   svgClass?: string | string[];
-  /**
-   * Style to apply to the svg.
-   */
-  svgStyle?: object;
-  /**
-   * Width of the svg.
-   */
-  width?: string | number;
-  /**
-   * Height of the svg.
-   */
-  height?: string | number;
-
-  ariaHidden?: boolean
 }
 defineProps<Props>()
 </script>

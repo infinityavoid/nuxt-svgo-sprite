@@ -4,6 +4,7 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   svgSprite: {
     inputDir:'/assets/icons',
-    createUseComponents: false
+    createUseComponents: false,
+    optimizeFiles: false
   }
 })

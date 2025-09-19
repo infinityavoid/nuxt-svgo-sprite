@@ -175,7 +175,7 @@ const nuxtSvgoSpriter: NuxtModule<ModuleOptions> = defineNuxtModule({
             filename: resolve(`./runtime/components/${fileName}.vue`),
             getContents: () => `
               <template>
-                <svg :class="svgClass" :width="width" :height="height" :aria-hidden="ariaHidden">
+                <svg :class="svgClass">
                   <use href="#${fileName}" />
                 </svg>
               </template>
@@ -183,27 +183,9 @@ const nuxtSvgoSpriter: NuxtModule<ModuleOptions> = defineNuxtModule({
               <script setup lang="ts">
               export interface Props {
                 /**
-                 * The id of the symbol to use from the sprite.
-                 */
-                symbol: string;
-                /**
                  * Css class(es) to apply to the svg.
                  */
                 svgClass?: string | string[];
-                /**
-                 * Style to apply to the svg.
-                 */
-                svgStyle?: object;
-                /**
-                 * Width of the svg.
-                 */
-                width?: string | number;
-                /**
-                 * Height of the svg.
-                 */
-                height?: string | number;
-              
-                ariaHidden?: boolean
               }
               defineProps<Props>()
               </script>
