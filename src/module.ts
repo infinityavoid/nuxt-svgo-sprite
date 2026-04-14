@@ -1,6 +1,5 @@
 import {
   defineNuxtModule,
-  createResolver,
   addComponent,
   addTemplate,
   updateTemplates,
@@ -86,7 +85,6 @@ export default defineNuxtModule<ModuleOptions>({
   },
 
   async setup(options, nuxt) {
-    const { resolve } = createResolver(import.meta.url)
     const srcDir = nuxt.options.srcDir
     const iconDir = path.join(srcDir, options.inputDir!)
 
@@ -163,9 +161,34 @@ export default defineNuxtModule<ModuleOptions>({
       write: true,
     })
 
+    const svgUseTemplate = addTemplate({
+      filename: 'nuxt-svgo-sprite/SvgUse.vue',
+      getContents: () => `<template>
+  <svg v-bind="$attrs">
+    <use :href="\`#\${name}\`" />
+  </svg>
+</template>
+
+<script setup lang="ts">
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore Nuxt resolves this alias in consumer app context.
+import type { SvgIconName } from '#build/nuxt-svgo-sprite/icon-names'
+
+defineOptions({ inheritAttrs: false })
+
+export interface Props {
+  name: SvgIconName
+}
+
+defineProps<Props>()
+</script>
+`,
+      write: true,
+    })
+
     addComponent({
       name: 'SvgUse',
-      filePath: resolve('./runtime/components/SvgUse.vue'),
+      filePath: svgUseTemplate.dst,
     })
 
     let spriteContent = await buildSprite()
@@ -191,7 +214,7 @@ export default defineNuxtModule<ModuleOptions>({
 
         const tpl = addTemplate({
           filename: `nuxt-svgo-sprite/icons/${iconName}.vue`,
-          getContents: () => `<template><SvgUse name="${iconName}" v-bind="$attrs"/></template><script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
+          getContents: () => `<template><svg v-bind="$attrs"><use href="#${iconName}"/></svg></template><script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
           write: true,
         })
 
