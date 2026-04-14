@@ -143,13 +143,17 @@ export default defineNuxtModule<ModuleOptions>({
 
       const { result } = await spriter.compileAsync()
 
-      for (const mode in result) {
-        for (const resource in result[mode]) {
-          return (result[mode][resource] as { contents: Buffer }).contents.toString()
-        }
+      const firstMode = Object.values(result)[0]
+      if (!firstMode) {
+        return ''
       }
 
-      return ''
+      const firstResource = Object.values(firstMode)[0] as { contents: Buffer } | undefined
+      if (!firstResource) {
+        return ''
+      }
+
+      return firstResource.contents.toString()
     }
 
     const initialSvgFiles = await getSvgFiles()

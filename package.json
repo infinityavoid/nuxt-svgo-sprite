@@ -1,6 +1,6 @@
 {
   "name": "nuxt-svgo-sprite",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Nuxt module for generating an inline SVG sprite with SVGO optimization (SSR-friendly)",
   "repository": "infinityavoid/nuxt-svgo-sprite",
   "license": "MIT",
