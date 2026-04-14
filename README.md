@@ -79,6 +79,7 @@ Notes:
 During build/dev, the module generates:
 
 - `#build/nuxt-svgo-sprite/icon-names.d.ts`
+- a generated `SvgUse` component in Nuxt build templates (`.nuxt`)
 
 `SvgUse` imports `SvgIconName` from this file, so IDE autocomplete is based on actual `.svg` filenames.
 
@@ -94,6 +95,8 @@ svgoSprite: {
 ```
 
 Then `arrow-right.svg` becomes `<IconArrowRight />`.
+
+Generated wrapper components are also emitted as Nuxt templates (`.nuxt`) and render a plain `<svg><use ... /></svg>` for each icon.
 
 ## Development
 
