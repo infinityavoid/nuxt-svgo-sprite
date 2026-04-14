@@ -1,10 +1,12 @@
 export default defineNuxtConfig({
   modules: ['nuxt-svgo-sprite'],
-  ssr: true,
-  devtools: { enabled: false },
-  svgSprite: {
-    inputDir:'/assets/icons',
-    createUseComponents: false,
-    optimizeFiles: false
-  }
+  devtools: { enabled: true },
+  compatibilityDate: 'latest',
+
+  svgoSprite: {
+    inputDir: './assets/icons',
+    createUseComponents: true,
+    componentPrefix: 'Icon',
+    optimizeFiles: true,
+  },
 })
