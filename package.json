@@ -1,6 +1,6 @@
 {
   "name": "nuxt-svgo-sprite",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "Nuxt module for generating an inline SVG sprite with SVGO optimization (SSR-friendly)",
   "repository": "infinityavoid/nuxt-svgo-sprite",
   "license": "MIT",
@@ -37,22 +37,23 @@
     "test:types": "vue-tsc --noEmit && cd playground && vue-tsc --noEmit"
   },
   "dependencies": {
-    "@nuxt/kit": "^4.4.2",
+    "@nuxt/kit": "^4.4.8",
+    "perfect-debounce": "^2.1.0",
     "svg-sprite": "^2.0.4"
   },
   "devDependencies": {
     "@nuxt/devtools": "^3.2.4",
-    "@nuxt/eslint-config": "^1.15.2",
+    "@nuxt/eslint-config": "^1.16.0",
     "@nuxt/module-builder": "^1.0.2",
-    "@nuxt/schema": "^4.4.2",
-    "@nuxt/test-utils": "^4.0.0",
+    "@nuxt/schema": "^4.4.8",
+    "@nuxt/test-utils": "^4.0.3",
     "@types/node": "latest",
     "@types/svg-sprite": "^0.0.39",
     "changelogen": "^0.6.2",
-    "eslint": "^10.2.0",
-    "nuxt": "^4.4.2",
-    "typescript": "~6.0.2",
-    "vitest": "^4.1.3",
-    "vue-tsc": "^3.2.6"
+    "eslint": "^10.6.0",
+    "nuxt": "^4.4.8",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.9",
+    "vue-tsc": "^3.3.5"
   }
 }

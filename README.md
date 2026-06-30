@@ -71,8 +71,9 @@ export default defineNuxtConfig({
 | `spriteOptions` | `SpriteConfig` | internal defaults |
 
 Notes:
-- `optimizeFiles: false` disables sprite transforms.
-- `spriteOptions` overrides default `svg-sprite` config.
+- `inputDir` is resolved via Nuxt's `resolvePath`, so `~` aliases work: `'~/assets/icons'`.
+- `optimizeFiles: false` disables SVGO sprite transforms.
+- `spriteOptions` is deep-merged over the built-in `svg-sprite` defaults, so partial configs are safe.
 
 ## Typed `SvgUse.name`
 
