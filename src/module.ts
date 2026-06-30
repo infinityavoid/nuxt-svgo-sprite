@@ -3,10 +3,14 @@ import {
   addComponent,
   addTemplate,
   updateTemplates,
+  useLogger,
+  resolvePath,
 } from '@nuxt/kit'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import SVGSprite, { type Config as SpriteConfig } from 'svg-sprite'
+import { debounce } from 'perfect-debounce'
+import { version } from '../package.json'
 
 function toPascalCase(str: string): string {
   return str
@@ -37,7 +41,7 @@ export const defaultSpriteConfig: SpriteConfig = {
 
 export interface ModuleOptions {
   /**
-   * Source directory for SVG files, relative to `srcDir`.
+   * Source directory for SVG files. Resolved via `resolvePath`, so `~` aliases work.
    * @default './assets/icons'
    */
   inputDir?: string
@@ -63,7 +67,7 @@ export interface ModuleOptions {
   optimizeFiles?: boolean
 
   /**
-   * Custom svg-sprite configuration that *replaces* the built-in defaults.
+   * Custom svg-sprite configuration, deep-merged over the built-in defaults by Nuxt.
    * Omit to use symbol mode with no CSS/SCSS output.
    */
   spriteOptions?: SpriteConfig
@@ -73,6 +77,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: 'nuxt-svgo-sprite',
     configKey: 'svgoSprite',
+    version,
     compatibility: { nuxt: '>=3.0.0' },
   },
 
@@ -85,16 +90,21 @@ export default defineNuxtModule<ModuleOptions>({
   },
 
   async setup(options, nuxt) {
-    const srcDir = nuxt.options.srcDir
-    const iconDir = path.join(srcDir, options.inputDir!)
+    const logger = useLogger('nuxt-svgo-sprite')
+    const iconDir = await resolvePath(options.inputDir!, {
+      cwd: nuxt.options.srcDir,
+      alias: nuxt.options.alias,
+      type: 'dir',
+    })
 
     try {
       await fs.access(iconDir)
     }
     catch {
-      console.warn(
-        `[nuxt-svgo-sprite] Input directory "${iconDir}" not found – sprite generation skipped.`,
-      )
+      // During `nuxt-module-build prepare` the module runs in a synthetic Nuxt context
+      // whose srcDir points to the package root (no icons there). This warning is expected
+      // in that case and does not affect end users.
+      logger.warn(`Input directory "${iconDir}" not found – sprite generation skipped.`)
       return
     }
 
@@ -115,24 +125,22 @@ export default defineNuxtModule<ModuleOptions>({
       return `export type SvgIconName = ${iconNameType}\n`
     }
 
-    async function buildSprite(): Promise<string> {
-      const svgFiles = await getSvgFiles()
-
+    async function buildSprite(svgFiles: string[]): Promise<string> {
       if (svgFiles.length === 0) {
-        console.warn('[nuxt-svgo-sprite] No .svg files found in input directory.')
+        logger.warn('No .svg files found in input directory.')
         return ''
       }
 
-      const baseSpriteConfig = options.spriteOptions ?? defaultSpriteConfig
-      const spriteConfig: SpriteConfig = (options.optimizeFiles ?? true)
-        ? baseSpriteConfig
+      const spriteConfig: SpriteConfig = options.optimizeFiles
+        ? options.spriteOptions!
         : {
-            ...baseSpriteConfig,
+            ...options.spriteOptions,
             shape: {
-              ...baseSpriteConfig.shape,
+              ...options.spriteOptions?.shape,
               transform: [],
             },
           }
+
       const spriter = new SVGSprite(spriteConfig)
 
       for (const file of svgFiles) {
@@ -143,21 +151,30 @@ export default defineNuxtModule<ModuleOptions>({
 
       const { result } = await spriter.compileAsync()
 
-      const firstMode = Object.values(result)[0]
-      if (!firstMode) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contents = (result as any)?.symbol?.sprite?.contents?.toString()
+      if (!contents) {
+        logger.error('Failed to extract sprite from svg-sprite result. Check your spriteOptions.')
         return ''
       }
 
-      const firstResource = Object.values(firstMode)[0] as { contents: Buffer } | undefined
-      if (!firstResource) {
-        return ''
-      }
-
-      return firstResource.contents.toString()
+      return contents
     }
 
-    const initialSvgFiles = await getSvgFiles()
-    let iconTypesContent = buildIconTypes(getIconNames(initialSvgFiles))
+    function registerUseComponent(iconName: string): void {
+      const componentName = `${options.componentPrefix}${toPascalCase(iconName)}`
+      const tpl = addTemplate({
+        filename: `nuxt-svgo-sprite/icons/${iconName}.vue`,
+        getContents: () => `<template><svg v-bind="$attrs"><use href="#${iconName}"/></svg></template><script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
+        write: true,
+      })
+      addComponent({ name: componentName, filePath: tpl.dst })
+    }
+
+    // Single scan — reused for types, sprite, use-components, and count (#2)
+    const svgFiles = await getSvgFiles()
+
+    let iconTypesContent = buildIconTypes(getIconNames(svgFiles))
 
     addTemplate({
       filename: 'nuxt-svgo-sprite/icon-names.d.ts',
@@ -195,7 +212,7 @@ defineProps<Props>()
       filePath: svgUseTemplate.dst,
     })
 
-    let spriteContent = await buildSprite()
+    let spriteContent = await buildSprite(svgFiles)
 
     const spriteTemplate = addTemplate({
       filename: 'nuxt-svgo-sprite/SvgSprite.vue',
@@ -209,44 +226,42 @@ defineProps<Props>()
     })
 
     if (options.createUseComponents) {
-      const svgFiles = await getSvgFiles()
-
       for (const file of svgFiles) {
-        const iconName = path.basename(file, '.svg')
-        const pascalName = toPascalCase(iconName)
-        const componentName = `${options.componentPrefix}${pascalName}`
-
-        const tpl = addTemplate({
-          filename: `nuxt-svgo-sprite/icons/${iconName}.vue`,
-          getContents: () => `<template><svg v-bind="$attrs"><use href="#${iconName}"/></svg></template><script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
-          write: true,
-        })
-
-        addComponent({ name: componentName, filePath: tpl.dst })
+        registerUseComponent(path.basename(file, '.svg'))
       }
     }
 
-    nuxt.hook('builder:watch', async (event, relativePath) => {
+    // Register generated types in consumer's tsconfig (#22)
+    nuxt.hook('prepare:types', ({ references }) => {
+      references.push({ path: path.resolve(nuxt.options.buildDir, 'nuxt-svgo-sprite/icon-names.d.ts') })
+    })
+
+    // Debounced watcher: coalesces rapid file changes; registers new Use components on add (#19, #1)
+    nuxt.hook('builder:watch', debounce(async (event, relativePath) => {
       const absPath = path.resolve(nuxt.options.rootDir, relativePath)
 
       if (!absPath.startsWith(iconDir)) return
       if (!relativePath.endsWith('.svg')) return
 
-      console.log(
-        `[nuxt-svgo-sprite] ${event}: "${relativePath}" – rebuilding sprite…`,
-      )
+      logger.info(`${event}: "${relativePath}" – rebuilding sprite…`)
 
-      spriteContent = await buildSprite()
-      iconTypesContent = buildIconTypes(getIconNames(await getSvgFiles()))
+      const currentFiles = await getSvgFiles()
+      spriteContent = await buildSprite(currentFiles)
+      iconTypesContent = buildIconTypes(getIconNames(currentFiles))
 
       await updateTemplates({
         filter: t =>
           t.filename === 'nuxt-svgo-sprite/SvgSprite.vue'
           || t.filename === 'nuxt-svgo-sprite/icon-names.d.ts',
       })
-    })
 
-    const count = (await getSvgFiles()).length
-    console.log(`[nuxt-svgo-sprite] Sprite built (${count} icon${count !== 1 ? 's' : ''}).`)
+      if (event === 'add' && options.createUseComponents) {
+        const iconName = path.basename(relativePath, '.svg')
+        registerUseComponent(iconName)
+        logger.info(`Registered new component <${options.componentPrefix}${toPascalCase(iconName)} />.`)
+      }
+    }, 100))
+
+    logger.info(`Sprite built (${svgFiles.length} icon${svgFiles.length !== 1 ? 's' : ''}).`)
   },
 })
