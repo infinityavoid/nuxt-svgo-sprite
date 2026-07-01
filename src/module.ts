@@ -1,6 +1,5 @@
 import {
   defineNuxtModule,
-  updateTemplates,
   useLogger,
   resolvePath,
 } from '@nuxt/kit'
@@ -8,12 +7,12 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Config as SpriteConfig } from 'svg-sprite'
 import { version } from '../package.json'
-import { defaultSpriteConfig, buildSprite } from './builders/sprite-builder'
+import { defaultSpriteConfig, buildAllSprites } from './builders/sprite-builder'
 import { buildCollectionsFromDir } from './builders/collection-builder'
 import { setupWatcher } from './watcher/watcher'
-import { buildIconTypesContent, setupTemplates, registerUseComponent } from './templates/templates'
-import { setupAutoInject } from './plugins/auto-inject'
-import type { SpriteCollection } from './types/types'
+import { buildIconTypesContent, setupTemplates } from './templates/templates'
+import { resolveInjectCollections, setupAutoInject } from './plugins/auto-inject'
+import { createRebuildHandler } from './setup/rebuild'
 
 export interface ModuleOptions {
   /**
@@ -93,36 +92,27 @@ export default defineNuxtModule<ModuleOptions>({
       return
     }
 
-    let collections = await buildCollectionsFromDir(iconDir, options.componentPrefix!, logger)
-
+    const collections = await buildCollectionsFromDir(iconDir, options.componentPrefix!, logger)
     if (collections.length === 0) {
       logger.warn('No SVG icons found in input directory — sprite generation skipped.')
       return
     }
 
-    // ── Build initial sprite content per collection ────────────────────────────
-    const spriteContents = new Map<string, string>()
-    for (const col of collections) {
-      spriteContents.set(
-        col.name,
-        await buildSprite(col.icons, options.spriteOptions!, options.optimizeFiles!, logger),
-      )
-    }
+    const spriteContents = await buildAllSprites(
+      collections,
+      options.spriteOptions!,
+      options.optimizeFiles!,
+      logger,
+    )
+    const collectionsRef = { current: collections }
+    const iconTypesRef = { current: buildIconTypesContent(collections) }
 
-    // ── Type content — mutable; updated by the watcher before updateTemplates ──
-    let iconTypesContent = buildIconTypesContent(collections)
+    const handles = setupTemplates(collections, options, spriteContents, () => iconTypesRef.current)
 
-    // ── Register all templates and components ─────────────────────────────────
-    const handles = setupTemplates(collections, options, spriteContents, () => iconTypesContent)
-
-    // ── Register type file in consumer tsconfig ───────────────────────────────
     nuxt.hook('prepare:types', ({ references }) => {
-      references.push({
-        path: path.resolve(nuxt.options.buildDir, handles.typeTemplateName),
-      })
+      references.push({ path: path.resolve(nuxt.options.buildDir, handles.typeTemplateName) })
     })
 
-    // ── autoInjectSprite ──────────────────────────────────────────────────────
     let injectTemplateName: string | undefined
     const injectedCollectionNames = new Set<string>()
 
@@ -142,65 +132,33 @@ export default defineNuxtModule<ModuleOptions>({
       }
     }
 
-    // ── Per-collection debounced watcher ──────────────────────────────────────
-    setupWatcher(nuxt, collections, logger, async (collection, event, absPath) => {
-      logger.info(`${event}: "${absPath}" – rebuilding collection "${collection.name}"…`)
+    const cleanup = setupWatcher(
+      nuxt,
+      collections,
+      logger,
+      createRebuildHandler({
+        iconDir,
+        options: {
+          componentPrefix: options.componentPrefix!,
+          spriteOptions: options.spriteOptions!,
+          optimizeFiles: options.optimizeFiles!,
+          createUseComponents: options.createUseComponents!,
+        },
+        collectionsRef,
+        spriteContents,
+        iconTypesRef,
+        handles,
+        injectTemplateName,
+        injectedCollectionNames,
+        logger,
+      }),
+    )
 
-      const updated = await buildCollectionsFromDir(iconDir, options.componentPrefix!, logger)
-      collections = updated
+    nuxt.hook('close', cleanup)
 
-      const updatedCol = updated.find(c => c.name === collection.name)
-      spriteContents.set(
-        collection.name,
-        await buildSprite(
-          updatedCol?.icons ?? [],
-          options.spriteOptions!,
-          options.optimizeFiles!,
-          logger,
-        ),
-      )
-      iconTypesContent = buildIconTypesContent(updated)
-
-      const spriteTplName = handles.spriteTemplateNames.get(collection.name)
-      const updateInject = injectTemplateName && injectedCollectionNames.has(collection.name)
-
-      await updateTemplates({
-        filter: t =>
-          t.filename === spriteTplName
-          || t.filename === handles.typeTemplateName
-          || (updateInject === true && t.filename === injectTemplateName),
-      })
-
-      if (event === 'add' && options.createUseComponents && updatedCol) {
-        const newIcon = updatedCol.icons.find(i => i.absolutePath === absPath)
-        if (newIcon) {
-          registerUseComponent(newIcon)
-          logger.info(`Registered new component <${newIcon.componentName} />.`)
-        }
-      }
-    })
-
-    const totalIcons = collections.reduce((n, c) => n + c.icons.length, 0)
+    const total = collections.reduce((n, c) => n + c.icons.length, 0)
     logger.info(
-      `Sprite built (${totalIcons} icon${totalIcons !== 1 ? 's' : ''} across ${collections.length} collection${collections.length !== 1 ? 's' : ''}).`,
+      `Sprite built (${total} icon${total !== 1 ? 's' : ''} across ${collections.length} collection${collections.length !== 1 ? 's' : ''}).`,
     )
   },
 })
-
-function resolveInjectCollections(
-  opt: true | string[],
-  collections: SpriteCollection[],
-  logger: ReturnType<typeof useLogger>,
-): SpriteCollection[] {
-  if (opt === true) return collections
-
-  const known = new Set(collections.map(c => c.name))
-  for (const name of opt) {
-    if (!known.has(name)) {
-      logger.warn(
-        `autoInjectSprite: unknown collection "${name}". Known collections: ${[...known].join(', ')}.`,
-      )
-    }
-  }
-  return collections.filter(c => opt.includes(c.name))
-}

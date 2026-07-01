@@ -64,7 +64,7 @@ export function setupWatcher(
   collections: SpriteCollection[],
   logger: WatcherLogger,
   onCollectionChange: OnCollectionChange,
-): void {
+): () => void {
   const handlers = new Map(
     collections.map(collection => [
       collection.name,
@@ -86,4 +86,10 @@ export function setupWatcher(
     const handler = handlers.get(collection.name)
     if (handler) await handler(event, absPath)
   })
+
+  return () => {
+    for (const handler of handlers.values()) {
+      handler.cancel()
+    }
+  }
 }

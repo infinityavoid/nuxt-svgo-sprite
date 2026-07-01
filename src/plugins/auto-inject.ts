@@ -1,6 +1,24 @@
 import { addTemplate, addServerPlugin } from '@nuxt/kit'
 import type { SpriteCollection } from '../types/types'
 
+export function resolveInjectCollections(
+  opt: true | string[],
+  collections: SpriteCollection[],
+  logger: { warn: (msg: string) => void },
+): SpriteCollection[] {
+  if (opt === true) return collections
+
+  const known = new Set(collections.map(c => c.name))
+  for (const name of opt) {
+    if (!known.has(name)) {
+      logger.warn(
+        `autoInjectSprite: unknown collection "${name}". Known collections: ${[...known].join(', ')}.`,
+      )
+    }
+  }
+  return collections.filter(c => opt.includes(c.name))
+}
+
 /**
  * Generates a Nitro server plugin that injects sprite SVGs into html.bodyPrepend
  * via the render:html hook. Sprites appear before #__nuxt so Vue hydration never

@@ -59,6 +59,24 @@ export function extractSprite(result: unknown, logger: Pick<SpriteLogger, 'error
 }
 
 /**
+ * Builds sprite content for every collection in parallel.
+ */
+export async function buildAllSprites(
+  collections: { name: string, icons: IconMeta[] }[],
+  spriteOptions: SpriteConfig,
+  optimizeFiles: boolean,
+  logger: SpriteLogger,
+): Promise<Map<string, string>> {
+  const contents = new Map<string, string>()
+  await Promise.all(
+    collections.map(async col =>
+      contents.set(col.name, await buildSprite(col.icons, spriteOptions, optimizeFiles, logger)),
+    ),
+  )
+  return contents
+}
+
+/**
  * Compiles an SVG sprite from the given icons.
  * Uses icon.id as the symbol id so that collection-prefixed ids (e.g. "admin-star")
  * are preserved regardless of the actual filename.
