@@ -9,37 +9,29 @@ import {
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Config as SpriteConfig } from 'svg-sprite'
-import { debounce } from 'perfect-debounce'
 import { version } from '../package.json'
 import { defaultSpriteConfig, buildSprite } from './builders/sprite-builder'
-import type { IconMeta } from './types/types'
-
-function toPascalCase(str: string): string {
-  return str
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('')
-}
+import { buildCollectionsFromDir } from './builders/collection-builder'
+import { setupWatcher } from './watcher/watcher'
+import type { SpriteCollection, IconMeta } from './types/types'
 
 export interface ModuleOptions {
   /**
-   * Source directory for SVG files. Resolved via `resolvePath`, so `~` aliases work.
+   * Root directory for SVG files. Collections are discovered automatically from
+   * the folder structure. Resolved via `resolvePath`, so `~` aliases work.
    * @default './assets/icons'
    */
   inputDir?: string
 
   /**
-   * Auto-generate a thin wrapper component for each SVG icon.
-   * When `true`, a file `arrow.svg` becomes `<UseArrow />` (prefix configurable).
+   * Auto-generate a thin wrapper component per icon across all collections.
    * @default false
    */
   createUseComponents?: boolean
 
   /**
-   * Prefix applied to the name of every generated per-icon component.
+   * Prefix for generated per-icon components.
    * @default 'use'
-   * @example 'Icon' → `<IconArrow />`
    */
   componentPrefix?: string
 
@@ -51,7 +43,6 @@ export interface ModuleOptions {
 
   /**
    * Custom svg-sprite configuration, deep-merged over the built-in defaults by Nuxt.
-   * Omit to use symbol mode with no CSS/SCSS output.
    */
   spriteOptions?: SpriteConfig
 }
@@ -74,6 +65,7 @@ export default defineNuxtModule<ModuleOptions>({
 
   async setup(options, nuxt) {
     const logger = useLogger('nuxt-svgo-sprite')
+
     const iconDir = await resolvePath(options.inputDir!, {
       cwd: nuxt.options.srcDir,
       alias: nuxt.options.alias,
@@ -91,54 +83,39 @@ export default defineNuxtModule<ModuleOptions>({
       return
     }
 
-    async function getSvgFiles(): Promise<string[]> {
-      const entries = await fs.readdir(iconDir)
-      return entries.filter(f => f.endsWith('.svg'))
+    let collections = await buildCollectionsFromDir(iconDir, options.componentPrefix!, logger)
+
+    if (collections.length === 0) {
+      logger.warn('No SVG icons found in input directory — sprite generation skipped.')
+      return
     }
 
-    function getIconNames(svgFiles: string[]): string[] {
-      return svgFiles.map(file => path.basename(file, '.svg'))
+    // ── Sprite content per collection ──────────────────────────────────────────
+    const spriteContents = new Map<string, string>()
+    for (const col of collections) {
+      spriteContents.set(
+        col.name,
+        await buildSprite(col.icons, options.spriteOptions!, options.optimizeFiles!, logger),
+      )
     }
 
-    function buildIconTypes(iconNames: string[]): string {
-      const iconNameType = iconNames.length === 0
+    // ── Types: flat union of all icon ids (per-collection types in Phase 3) ───
+    function buildIconTypes(cols: SpriteCollection[]): string {
+      const allIds = cols.flatMap(c => c.icons.map(i => i.id))
+      const typeStr = allIds.length === 0
         ? 'string'
-        : iconNames.map(name => JSON.stringify(name)).join(' | ')
-
-      return `export type SvgIconName = ${iconNameType}\n`
+        : allIds.map(id => JSON.stringify(id)).join(' | ')
+      return `export type SvgIconName = ${typeStr}\n`
     }
 
-    // Construct minimal IconMeta objects from a flat list of filenames.
-    // In Phase 2 this is replaced by the full collection builder which uses buildIconMeta().
-    function filesToIcons(svgFiles: string[]): IconMeta[] {
-      return svgFiles.map(file => ({
-        id: path.basename(file, '.svg'),
-        componentName: '',
-        absolutePath: path.join(iconDir, file),
-      }))
-    }
-
-    function registerUseComponent(iconName: string): void {
-      const componentName = `${options.componentPrefix}${toPascalCase(iconName)}`
-      const tpl = addTemplate({
-        filename: `nuxt-svgo-sprite/icons/${iconName}.vue`,
-        getContents: () => `<template><svg v-bind="$attrs"><use href="#${iconName}"/></svg></template><script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
-        write: true,
-      })
-      addComponent({ name: componentName, filePath: tpl.dst })
-    }
-
-    // Single scan — reused for types, sprite, use-components, and count (#2)
-    const svgFiles = await getSvgFiles()
-
-    let iconTypesContent = buildIconTypes(getIconNames(svgFiles))
-
+    let iconTypesContent = buildIconTypes(collections)
     addTemplate({
       filename: 'nuxt-svgo-sprite/icon-names.d.ts',
       getContents: () => iconTypesContent,
       write: true,
     })
 
+    // ── SvgUse generic component ────────────────────────────────────────────────
     const svgUseTemplate = addTemplate({
       filename: 'nuxt-svgo-sprite/SvgUse.vue',
       getContents: () => `<template>
@@ -163,72 +140,87 @@ defineProps<Props>()
 `,
       write: true,
     })
+    addComponent({ name: 'SvgUse', filePath: svgUseTemplate.dst })
 
-    addComponent({
-      name: 'SvgUse',
-      filePath: svgUseTemplate.dst,
-    })
+    // ── One sprite template + component per collection ──────────────────────────
+    // Default collection → 'SvgSprite' for now (renamed to 'Sprite' in Phase 3).
+    const spriteTemplateNames = new Map<string, string>()
+    for (const col of collections) {
+      const tplFilename = col.name === 'default'
+        ? 'nuxt-svgo-sprite/SvgSprite.vue'
+        : `nuxt-svgo-sprite/${col.spriteComponentName}.vue`
+      const componentName = col.name === 'default' ? 'SvgSprite' : col.spriteComponentName
 
-    let spriteContent = await buildSprite(
-      filesToIcons(svgFiles),
-      options.spriteOptions!,
-      options.optimizeFiles!,
-      logger,
-    )
+      spriteTemplateNames.set(col.name, tplFilename)
 
-    const spriteTemplate = addTemplate({
-      filename: 'nuxt-svgo-sprite/SvgSprite.vue',
-      getContents: () => `<template>${spriteContent}</template>`,
-      write: true,
-    })
+      const tpl = addTemplate({
+        filename: tplFilename,
+        getContents: () => `<template>${spriteContents.get(col.name) ?? ''}</template>`,
+        write: true,
+      })
+      addComponent({ name: componentName, filePath: tpl.dst })
+    }
 
-    addComponent({
-      name: 'SvgSprite',
-      filePath: spriteTemplate.dst,
-    })
+    // ── Use* wrapper components ────────────────────────────────────────────────
+    function registerUseComponent(icon: IconMeta): void {
+      const tpl = addTemplate({
+        filename: `nuxt-svgo-sprite/icons/${icon.id}.vue`,
+        getContents: () => `<template><svg v-bind="$attrs"><use href="#${icon.id}"/></svg></template><script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
+        write: true,
+      })
+      addComponent({ name: icon.componentName, filePath: tpl.dst })
+    }
 
     if (options.createUseComponents) {
-      for (const file of svgFiles) {
-        registerUseComponent(path.basename(file, '.svg'))
+      for (const col of collections) {
+        for (const icon of col.icons) {
+          registerUseComponent(icon)
+        }
       }
     }
 
-    // Register generated types in consumer's tsconfig (#22)
+    // ── Register types in consumer's tsconfig ───────────────────────────────────
     nuxt.hook('prepare:types', ({ references }) => {
       references.push({ path: path.resolve(nuxt.options.buildDir, 'nuxt-svgo-sprite/icon-names.d.ts') })
     })
 
-    // Debounced watcher: coalesces rapid file changes; registers new Use components on add (#19, #1)
-    nuxt.hook('builder:watch', debounce(async (event, relativePath) => {
-      const absPath = path.resolve(nuxt.options.rootDir, relativePath)
+    // ── Per-collection debounced watcher ────────────────────────────────────────
+    setupWatcher(nuxt, collections, logger, async (collection, event, absPath) => {
+      logger.info(`${event}: "${absPath}" – rebuilding collection "${collection.name}"…`)
 
-      if (!absPath.startsWith(iconDir)) return
-      if (!relativePath.endsWith('.svg')) return
+      // Re-scan the entire tree so default/ subfolder changes are picked up correctly.
+      const updated = await buildCollectionsFromDir(iconDir, options.componentPrefix!, logger)
+      collections = updated
 
-      logger.info(`${event}: "${relativePath}" – rebuilding sprite…`)
-
-      const currentFiles = await getSvgFiles()
-      spriteContent = await buildSprite(
-        filesToIcons(currentFiles),
-        options.spriteOptions!,
-        options.optimizeFiles!,
-        logger,
+      const updatedCol = updated.find(c => c.name === collection.name)
+      spriteContents.set(
+        collection.name,
+        await buildSprite(
+          updatedCol?.icons ?? [],
+          options.spriteOptions!,
+          options.optimizeFiles!,
+          logger,
+        ),
       )
-      iconTypesContent = buildIconTypes(getIconNames(currentFiles))
+      iconTypesContent = buildIconTypes(updated)
 
+      const tplName = spriteTemplateNames.get(collection.name)
       await updateTemplates({
-        filter: t =>
-          t.filename === 'nuxt-svgo-sprite/SvgSprite.vue'
-          || t.filename === 'nuxt-svgo-sprite/icon-names.d.ts',
+        filter: t => t.filename === tplName || t.filename === 'nuxt-svgo-sprite/icon-names.d.ts',
       })
 
-      if (event === 'add' && options.createUseComponents) {
-        const iconName = path.basename(relativePath, '.svg')
-        registerUseComponent(iconName)
-        logger.info(`Registered new component <${options.componentPrefix}${toPascalCase(iconName)} />.`)
+      if (event === 'add' && options.createUseComponents && updatedCol) {
+        const newIcon = updatedCol.icons.find(i => i.absolutePath === absPath)
+        if (newIcon) {
+          registerUseComponent(newIcon)
+          logger.info(`Registered new component <${newIcon.componentName} />.`)
+        }
       }
-    }, 100))
+    })
 
-    logger.info(`Sprite built (${svgFiles.length} icon${svgFiles.length !== 1 ? 's' : ''}).`)
+    const totalIcons = collections.reduce((n, c) => n + c.icons.length, 0)
+    logger.info(
+      `Sprite built (${totalIcons} icon${totalIcons !== 1 ? 's' : ''} across ${collections.length} collection${collections.length !== 1 ? 's' : ''}).`,
+    )
   },
 })
