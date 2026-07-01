@@ -12,6 +12,8 @@ import { defaultSpriteConfig, buildSprite } from './builders/sprite-builder'
 import { buildCollectionsFromDir } from './builders/collection-builder'
 import { setupWatcher } from './watcher/watcher'
 import { buildIconTypesContent, setupTemplates, registerUseComponent } from './templates/templates'
+import { setupAutoInject } from './plugins/auto-inject'
+import type { SpriteCollection } from './types/types'
 
 export interface ModuleOptions {
   /**
@@ -43,6 +45,15 @@ export interface ModuleOptions {
    * Custom svg-sprite configuration, deep-merged over the built-in defaults by Nuxt.
    */
   spriteOptions?: SpriteConfig
+
+  /**
+   * Inject sprite components automatically:
+   *   false      — user places sprite components manually (default)
+   *   true       — all collection sprites injected into every page
+   *   string[]   — only the listed collection names are injected
+   * @default false
+   */
+  autoInjectSprite?: boolean | string[]
 }
 
 export default defineNuxtModule<ModuleOptions>({
@@ -59,6 +70,7 @@ export default defineNuxtModule<ModuleOptions>({
     componentPrefix: 'Use',
     optimizeFiles: true,
     spriteOptions: defaultSpriteConfig,
+    autoInjectSprite: false,
   },
 
   async setup(options, nuxt) {
@@ -110,6 +122,26 @@ export default defineNuxtModule<ModuleOptions>({
       })
     })
 
+    // ── autoInjectSprite ──────────────────────────────────────────────────────
+    let injectTemplateName: string | undefined
+    const injectedCollectionNames = new Set<string>()
+
+    if (!options.autoInjectSprite) {
+      if (nuxt.options.dev) {
+        const names = collections.map(c => `<${c.spriteComponentName} />`).join(', ')
+        logger.info(
+          `Sprites are not injected automatically. Add ${names} to your app.vue, or set \`autoInjectSprite: true\`.`,
+        )
+      }
+    }
+    else {
+      const injectCols = resolveInjectCollections(options.autoInjectSprite, collections, logger)
+      if (injectCols.length > 0) {
+        injectTemplateName = setupAutoInject(injectCols, spriteContents)
+        for (const c of injectCols) injectedCollectionNames.add(c.name)
+      }
+    }
+
     // ── Per-collection debounced watcher ──────────────────────────────────────
     setupWatcher(nuxt, collections, logger, async (collection, event, absPath) => {
       logger.info(`${event}: "${absPath}" – rebuilding collection "${collection.name}"…`)
@@ -130,8 +162,13 @@ export default defineNuxtModule<ModuleOptions>({
       iconTypesContent = buildIconTypesContent(updated)
 
       const spriteTplName = handles.spriteTemplateNames.get(collection.name)
+      const updateInject = injectTemplateName && injectedCollectionNames.has(collection.name)
+
       await updateTemplates({
-        filter: t => t.filename === spriteTplName || t.filename === handles.typeTemplateName,
+        filter: t =>
+          t.filename === spriteTplName
+          || t.filename === handles.typeTemplateName
+          || (updateInject === true && t.filename === injectTemplateName),
       })
 
       if (event === 'add' && options.createUseComponents && updatedCol) {
@@ -149,3 +186,21 @@ export default defineNuxtModule<ModuleOptions>({
     )
   },
 })
+
+function resolveInjectCollections(
+  opt: true | string[],
+  collections: SpriteCollection[],
+  logger: ReturnType<typeof useLogger>,
+): SpriteCollection[] {
+  if (opt === true) return collections
+
+  const known = new Set(collections.map(c => c.name))
+  for (const name of opt) {
+    if (!known.has(name)) {
+      logger.warn(
+        `autoInjectSprite: unknown collection "${name}". Known collections: ${[...known].join(', ')}.`,
+      )
+    }
+  }
+  return collections.filter(c => opt.includes(c.name))
+}
