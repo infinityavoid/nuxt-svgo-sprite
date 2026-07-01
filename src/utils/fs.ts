@@ -13,13 +13,10 @@ async function walk(
   segments: string[],
   result: Map<string, WalkerEntry>,
 ): Promise<void> {
-  let entries: Awaited<ReturnType<typeof fsp.readdir>>
-  try {
-    entries = await fsp.readdir(dir, { withFileTypes: true })
-  }
-  catch {
-    return
-  }
+  const entries = await fsp
+    .readdir(dir, { withFileTypes: true, encoding: 'utf8' })
+    .catch(() => null)
+  if (!entries) return
 
   // Use null-byte separator to avoid collisions with folder names
   const key = segments.length === 0 ? '\0' : segments.join('\0')
