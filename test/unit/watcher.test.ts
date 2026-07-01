@@ -16,7 +16,7 @@ function makeCollection(
     name,
     segments,
     inputDir,
-    spriteComponentName: name === 'default' ? 'Sprite' : `${name.charAt(0).toUpperCase() + name.slice(1)}Sprite`,
+    spriteComponentName: name === 'default' ? 'DefaultSprite' : `${name.charAt(0).toUpperCase() + name.slice(1)}Sprite`,
     typeName: `${name.charAt(0).toUpperCase() + name.slice(1)}IconName`,
     icons,
   }

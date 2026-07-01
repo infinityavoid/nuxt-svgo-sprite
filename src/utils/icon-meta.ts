@@ -50,10 +50,10 @@ export function deriveTypeName(collectionName: string): string {
 
 /**
  * Derives the sprite component name for a collection.
- * default → "Sprite"; others → PascalCase(name) + "Sprite".
+ * Uniform formula for all collections: PascalCase(name) + "Sprite".
+ * Examples: default → DefaultSprite, admin → AdminSprite.
  */
 export function deriveSpriteComponentName(collectionName: string): string {
-  if (collectionName === 'default') return 'Sprite'
   return toPascalCase(collectionName) + 'Sprite'
 }
 

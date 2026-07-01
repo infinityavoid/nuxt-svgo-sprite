@@ -37,7 +37,7 @@ describe('buildCollectionsFromDir', () => {
     expect(col!.name).toBe('default')
     expect(col!.segments).toEqual([])
     expect(col!.inputDir).toBe(tmpDir)
-    expect(col!.spriteComponentName).toBe('Sprite')
+    expect(col!.spriteComponentName).toBe('DefaultSprite')
     expect(col!.typeName).toBe('DefaultIconName')
     expect(col!.icons).toHaveLength(2)
     expect(col!.icons.map(i => i.id)).toEqual(expect.arrayContaining(['home', 'close']))

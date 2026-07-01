@@ -81,8 +81,8 @@ describe('deriveTypeName', () => {
 })
 
 describe('deriveSpriteComponentName', () => {
-  it('default → Sprite', () => {
-    expect(deriveSpriteComponentName('default')).toBe('Sprite')
+  it('default → DefaultSprite', () => {
+    expect(deriveSpriteComponentName('default')).toBe('DefaultSprite')
   })
   it('admin → AdminSprite', () => {
     expect(deriveSpriteComponentName('admin')).toBe('AdminSprite')
