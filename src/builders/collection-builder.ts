@@ -25,7 +25,7 @@ export async function buildCollectionsFromDir(
   componentPrefix: string,
   logger: CollectionLogger,
 ): Promise<SpriteCollection[]> {
-  const entries = await walkInputDir(resolvedInputDir)
+  const entries = await walkInputDir(resolvedInputDir, logger)
   const collections: SpriteCollection[] = []
 
   for (const entry of entries) {
@@ -69,4 +69,38 @@ export async function buildCollectionsFromDir(
   }
 
   return collections
+}
+
+/**
+ * Re-scans a single collection's folder and returns an updated SpriteCollection.
+ * Used by the watcher rebuild path to avoid re-scanning the entire inputDir tree.
+ */
+export async function rebuildSingleCollection(
+  collection: SpriteCollection,
+  componentPrefix: string,
+  logger: CollectionLogger,
+): Promise<SpriteCollection> {
+  const entries = await walkInputDir(collection.inputDir, logger)
+  const direct = entries.find(e => e.segments.length === 0)
+  const files = direct?.files ?? []
+
+  const seenIds = new Set<string>()
+  const icons: IconMeta[] = []
+
+  for (const filePath of files) {
+    const filename = path.basename(filePath)
+    const meta = buildIconMeta(filename, collection.segments, filePath, componentPrefix)
+
+    if (seenIds.has(meta.id)) {
+      logger.warn(
+        `Id collision in collection "${collection.name}": "${meta.id}" already exists. Skipping "${filename}".`,
+      )
+      continue
+    }
+
+    seenIds.add(meta.id)
+    icons.push(meta)
+  }
+
+  return { ...collection, icons }
 }

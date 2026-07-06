@@ -1,6 +1,6 @@
 import { updateTemplates } from '@nuxt/kit'
 import type { Config as SpriteConfig } from 'svg-sprite'
-import { buildCollectionsFromDir } from '../builders/collection-builder'
+import { rebuildSingleCollection } from '../builders/collection-builder'
 import { buildSprite } from '../builders/sprite-builder'
 import { buildIconTypesContent, registerUseComponent } from '../templates/templates'
 import type { SpriteCollection } from '../types/types'
@@ -20,7 +20,6 @@ interface RebuildLogger {
 }
 
 export interface RebuildContext {
-  iconDir: string
   options: RebuildOptions
   collectionsRef: { current: SpriteCollection[] }
   spriteContents: Map<string, string>
@@ -35,24 +34,24 @@ export function createRebuildHandler(ctx: RebuildContext) {
   return async (collection: SpriteCollection, event: string, absPath: string): Promise<void> => {
     ctx.logger.info(`${event}: "${absPath}" – rebuilding collection "${collection.name}"…`)
 
-    const updated = await buildCollectionsFromDir(
-      ctx.iconDir,
+    const updatedCol = await rebuildSingleCollection(
+      collection,
       ctx.options.componentPrefix,
       ctx.logger,
     )
-    ctx.collectionsRef.current = updated
-
-    const updatedCol = updated.find(c => c.name === collection.name)
+    ctx.collectionsRef.current = ctx.collectionsRef.current.map(c =>
+      c.name === collection.name ? updatedCol : c,
+    )
     ctx.spriteContents.set(
       collection.name,
       await buildSprite(
-        updatedCol?.icons ?? [],
+        updatedCol.icons,
         ctx.options.spriteOptions,
         ctx.options.optimizeFiles,
         ctx.logger,
       ),
     )
-    ctx.iconTypesRef.current = buildIconTypesContent(updated)
+    ctx.iconTypesRef.current = buildIconTypesContent(ctx.collectionsRef.current)
 
     const spriteTplName = ctx.handles.spriteTemplateNames.get(collection.name)
     const updateInject = ctx.injectTemplateName && ctx.injectedCollectionNames.has(collection.name)

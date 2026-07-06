@@ -5,7 +5,6 @@ import {
 } from '@nuxt/kit'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import type { Config as SpriteConfig } from 'svg-sprite'
 import { version } from '../package.json'
 import { defaultSpriteConfig, buildAllSprites } from './builders/sprite-builder'
 import { buildCollectionsFromDir } from './builders/collection-builder'
@@ -13,47 +12,9 @@ import { setupWatcher } from './watcher/watcher'
 import { buildIconTypesContent, setupTemplates } from './templates/templates'
 import { resolveInjectCollections, setupAutoInject } from './plugins/auto-inject'
 import { createRebuildHandler } from './setup/rebuild'
+import type { ModuleOptions } from './types/types'
 
-export interface ModuleOptions {
-  /**
-   * Root directory for SVG files. Collections are discovered automatically from
-   * the folder structure. Resolved via `resolvePath`, so `~` aliases work.
-   * @default './assets/icons'
-   */
-  inputDir?: string
-
-  /**
-   * Auto-generate a thin wrapper component per icon across all collections.
-   * @default false
-   */
-  createUseComponents?: boolean
-
-  /**
-   * Prefix for generated per-icon components.
-   * @default 'Use'
-   */
-  componentPrefix?: string
-
-  /**
-   * Run SVGO on every SVG file before adding it to the sprite.
-   * @default true
-   */
-  optimizeFiles?: boolean
-
-  /**
-   * Custom svg-sprite configuration, deep-merged over the built-in defaults by Nuxt.
-   */
-  spriteOptions?: SpriteConfig
-
-  /**
-   * Inject sprite components automatically:
-   *   false      — user places sprite components manually (default)
-   *   true       — all collection sprites injected into every page
-   *   string[]   — only the listed collection names are injected
-   * @default false
-   */
-  autoInjectSprite?: boolean | string[]
-}
+export type { ModuleOptions } from './types/types'
 
 export default defineNuxtModule<ModuleOptions>({
   meta: {
@@ -137,7 +98,6 @@ export default defineNuxtModule<ModuleOptions>({
       collections,
       logger,
       createRebuildHandler({
-        iconDir,
         options: {
           componentPrefix: options.componentPrefix!,
           spriteOptions: options.spriteOptions!,

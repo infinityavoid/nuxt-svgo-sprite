@@ -36,6 +36,12 @@ async function makeIcon(id: string, filename = id): Promise<IconMeta> {
   return { id, componentName: `Use${id}`, absolutePath: filePath }
 }
 
+async function makeIconWithContent(id: string, content: string): Promise<IconMeta> {
+  const filePath = path.join(tmpDir, `${id}.svg`)
+  await fsp.writeFile(filePath, content, 'utf-8')
+  return { id, componentName: `Use${id}`, absolutePath: filePath }
+}
+
 // ─── buildSpriteConfig ────────────────────────────────────────────────────────
 
 describe('buildSpriteConfig', () => {
@@ -127,6 +133,17 @@ describe('buildSprite', () => {
     const sprite = await buildSprite([icon], defaultSpriteConfig, false, mockLogger)
     expect(sprite).toContain('id="check"')
     expect(mockLogger.error).not.toHaveBeenCalled()
+  })
+
+  it('prefixIds: two icons with the same internal element id produce no collisions', async () => {
+    const SVG_WITH_CLIP = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+      + '<defs><clipPath id="clip0"><rect width="24" height="24"/></clipPath></defs>'
+      + '<circle clip-path="url(#clip0)" cx="12" cy="12" r="10"/></svg>'
+    const icon1 = await makeIconWithContent('home', SVG_WITH_CLIP)
+    const icon2 = await makeIconWithContent('star', SVG_WITH_CLIP)
+    const sprite = await buildSprite([icon1, icon2], defaultSpriteConfig, true, mockLogger)
+    const ids = [...sprite.matchAll(/\bid="([^"]*)"/g)].map(m => m[1])
+    expect(ids.length).toBe(new Set(ids).size)
   })
 
   it('handles multiple icons with collection-prefixed ids', async () => {

@@ -8,14 +8,22 @@ export interface WalkerEntry {
   files: string[]
 }
 
+export interface WalkerLogger {
+  warn(msg: string): void
+}
+
 async function walk(
   dir: string,
   segments: string[],
   result: Map<string, WalkerEntry>,
+  logger?: WalkerLogger,
 ): Promise<void> {
   const entries = await fsp
     .readdir(dir, { withFileTypes: true, encoding: 'utf8' })
-    .catch(() => null)
+    .catch((err: Error) => {
+      logger?.warn(`Cannot read directory "${dir}": ${err.message}`)
+      return null
+    })
   if (!entries) return
 
   // Use null-byte separator to avoid collisions with folder names
@@ -35,10 +43,10 @@ async function walk(
     else if (entry.isDirectory()) {
       // "default/" at the root level merges its direct SVGs into the default collection
       if (segments.length === 0 && entry.name === 'default') {
-        await walk(fullPath, [], result)
+        await walk(fullPath, [], result, logger)
       }
       else {
-        await walk(fullPath, [...segments, entry.name], result)
+        await walk(fullPath, [...segments, entry.name], result, logger)
       }
     }
   }
@@ -48,8 +56,8 @@ async function walk(
  * Walks inputDir and groups .svg files by their collection (parent folder segments).
  * Returns one WalkerEntry per distinct collection; entries with no files are omitted.
  */
-export async function walkInputDir(inputDir: string): Promise<WalkerEntry[]> {
+export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Promise<WalkerEntry[]> {
   const result = new Map<string, WalkerEntry>()
-  await walk(inputDir, [], result)
+  await walk(inputDir, [], result, logger)
   return Array.from(result.values())
 }

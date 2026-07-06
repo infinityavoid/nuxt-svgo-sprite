@@ -3,6 +3,28 @@ import { promises as fsp } from 'node:fs'
 import path from 'node:path'
 import type { IconMeta } from '../types/types'
 
+function hashCode(str: string): number {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0
+  }
+  return Math.abs(hash)
+}
+
+function prefixInternalIds(svg: string, prefix: string): string {
+  const ids = new Set<string>()
+  for (const m of svg.matchAll(/\bid="([^"]*)"/g)) ids.add(m[1]!)
+  if (ids.size === 0) return svg
+  let out = svg.replace(/\bid="([^"]*)"/g, (_, id: string) => `id="${prefix}-${id}"`)
+  out = out.replace(/url\(#([^)]+)\)/g, (_, ref: string) =>
+    ids.has(ref) ? `url(#${prefix}-${ref})` : `url(#${ref})`,
+  )
+  out = out.replace(/(xlink:href|href)="#([^"]*)"/g, (_, attr: string, ref: string) =>
+    ids.has(ref) ? `${attr}="#${prefix}-${ref}"` : `${attr}="#${ref}"`,
+  )
+  return out
+}
+
 export interface SpriteLogger {
   error(msg: string): void
   warn(msg: string): void
@@ -96,11 +118,9 @@ export async function buildSprite(
   const spriter = new SVGSprite(config)
 
   for (const icon of icons) {
-    const content = await fsp.readFile(icon.absolutePath, 'utf-8')
-    // Use a virtual file path with icon.id as the basename so svg-sprite derives our
-    // computed id as the symbol id, regardless of the actual filename on disk.
-    // svg-sprite uses the file path only for id derivation; the content comes from `content`.
+    const raw = await fsp.readFile(icon.absolutePath, 'utf-8')
     const virtualPath = path.join(path.dirname(icon.absolutePath), `${icon.id}.svg`)
+    const content = prefixInternalIds(raw, `i${hashCode(virtualPath)}`)
     spriter.add(virtualPath, null, content)
   }
 

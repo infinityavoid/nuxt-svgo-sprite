@@ -1,7 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { promises as fsp } from 'node:fs'
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { walkInputDir } from '../../src/utils/fs'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>'
@@ -99,6 +99,14 @@ describe('walkInputDir', () => {
   it('returns empty array when inputDir does not exist', async () => {
     const entries = await walkInputDir(path.join(tmpDir, 'nonexistent'))
     expect(entries).toEqual([])
+  })
+
+  it('calls logger.warn when readdir fails', async () => {
+    const logger = { warn: vi.fn() }
+    const entries = await walkInputDir(path.join(tmpDir, 'nonexistent'), logger)
+    expect(entries).toEqual([])
+    expect(logger.warn).toHaveBeenCalledOnce()
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('nonexistent'))
   })
 
   it('skips symlinks', async () => {
