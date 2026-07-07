@@ -136,7 +136,6 @@ describe('setupWatcher', () => {
 
   function makeMockNuxt(rootDir: string): MockNuxt {
     const hookHandlers: Record<string, (event: string, relativePath: string) => Promise<void>> = {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return {
       options: { rootDir },
       hook: vi.fn((name: string, handler: (event: string, relativePath: string) => Promise<void>) => {

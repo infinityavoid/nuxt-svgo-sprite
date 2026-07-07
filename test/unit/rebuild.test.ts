@@ -48,8 +48,7 @@ function makeCtx(overrides: Partial<RebuildContext> = {}): RebuildContext {
   return {
     options: {
       componentPrefix: 'Use',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      spriteOptions: {} as any,
+      spriteOptions: {},
       optimizeFiles: true,
       createUseComponents: false,
     },
