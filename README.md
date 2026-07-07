@@ -104,11 +104,17 @@ If you prefer not to place these manually, use [`autoInjectSprite`](#autoinjects
 References any icon by id across all collections:
 
 ```vue
+<!-- static name -->
 <SvgUse name="home" width="24" height="24" />
 <SvgUse name="admin-user" width="24" height="24" stroke="currentColor" />
+
+<!-- dynamic name — works at runtime; TypeScript still checks AllIconName -->
+<SvgUse :name="currentIcon" width="24" height="24" />
 ```
 
 All standard SVG attributes are forwarded to the inner `<svg>` element. The `name` prop is typed as `AllIconName` (union of all collection types) — IDE autocomplete and typo detection work out of the box.
+
+> **Mount order:** the sprite component (`<DefaultSprite />`, `<AdminSprite />`, etc.) must appear in the DOM **before** any `<SvgUse>` that references its symbols. Place sprite components in a shared layout or at the top of the page template. If you use `autoInjectSprite`, this is handled automatically.
 
 ### Per-icon wrapper components
 
