@@ -7,6 +7,8 @@ export interface IconMeta {
   componentName: string
   /** absolute filesystem path */
   absolutePath: string
+  /** when true, SVGO optimization is skipped for this icon (file named *.raw.svg) */
+  raw?: boolean
 }
 
 export interface SpriteCollection {

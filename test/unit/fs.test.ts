@@ -132,4 +132,22 @@ describe('walkInputDir', () => {
     expect(entries[0]!.segments).toEqual(['sub'])
     expect(entries[0]!.files).toContain(file)
   })
+
+  it('ignores SVG files inside node_modules subfolder', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('node_modules', 'some-lib', 'icon.svg')
+    const entries = await walkInputDir(tmpDir)
+    expect(entries).toHaveLength(1)
+    const allFiles = entries.flatMap(e => e.files)
+    expect(allFiles.every(f => !f.includes('node_modules'))).toBe(true)
+  })
+
+  it('ignores SVG files inside dist subfolder', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('dist', 'bundle.svg')
+    const entries = await walkInputDir(tmpDir)
+    expect(entries).toHaveLength(1)
+    const allFiles = entries.flatMap(e => e.files)
+    expect(allFiles.every(f => !f.replace(/\\/g, '/').includes('/dist/'))).toBe(true)
+  })
 })

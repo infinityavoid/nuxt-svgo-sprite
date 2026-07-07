@@ -73,8 +73,14 @@ describe('buildIconTypesContent', () => {
       makeCol('default', 'DefaultIconName', ['home']),
       makeCol('admin', 'AdminIconName', ['admin-star']),
     ])
-    const lines = content.trim().split('\n')
-    expect(lines).toHaveLength(3) // DefaultIconName, AdminIconName, AllIconName
+    const exportLines = content.split('\n').filter(l => l.startsWith('export type'))
+    expect(exportLines).toHaveLength(3) // DefaultIconName, AdminIconName, AllIconName
+  })
+
+  it('each type export has a preceding JSDoc block', () => {
+    const content = buildIconTypesContent([makeCol('default', 'DefaultIconName', ['home'])])
+    expect(content).toContain('/**')
+    expect(content).toContain('@example')
   })
 
   it('output ends with a newline', () => {

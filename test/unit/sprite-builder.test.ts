@@ -7,6 +7,7 @@ import {
   buildSpriteConfig,
   extractSprite,
   buildSprite,
+  mergeSprites,
 } from '../../src/builders/sprite-builder'
 import type { IconMeta } from '../../src/types/types'
 
@@ -154,5 +155,37 @@ describe('buildSprite', () => {
     const sprite = await buildSprite(icons, defaultSpriteConfig, true, mockLogger)
     expect(sprite).toContain('id="admin-star"')
     expect(sprite).toContain('id="admin-close"')
+  })
+
+  it('raw opt-out: *.raw.svg icon preserves content SVGO would strip; adjacent icon is still optimized', async () => {
+    // SVGO's preset-default removes XML comments — use that as a reliable marker
+    const SVG_WITH_COMMENT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><!-- keep-raw --><circle cx="12" cy="12" r="10"/></svg>'
+    const SVG_PLAIN = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><!-- strip-me --><circle cx="12" cy="12" r="8"/></svg>'
+    const rawIcon: IconMeta = { ...(await makeIconWithContent('raw-icon', SVG_WITH_COMMENT)), raw: true }
+    const normalIcon = await makeIconWithContent('normal-icon', SVG_PLAIN)
+    const sprite = await buildSprite([normalIcon, rawIcon], defaultSpriteConfig, true, mockLogger)
+    expect(sprite).toContain('keep-raw')
+    expect(sprite).not.toContain('strip-me')
+  })
+})
+
+// ─── mergeSprites ─────────────────────────────────────────────────────────────
+
+describe('mergeSprites', () => {
+  it('returns secondary when primary is empty', () => {
+    expect(mergeSprites('', '<svg><symbol id="a"/></svg>')).toBe('<svg><symbol id="a"/></svg>')
+  })
+
+  it('returns primary when secondary is empty', () => {
+    expect(mergeSprites('<svg><symbol id="a"/></svg>', '')).toBe('<svg><symbol id="a"/></svg>')
+  })
+
+  it('appends symbols from secondary into primary', () => {
+    const primary = '<svg><symbol id="a"><circle/></symbol></svg>'
+    const secondary = '<svg><symbol id="b"><rect/></symbol></svg>'
+    const result = mergeSprites(primary, secondary)
+    expect(result).toContain('id="a"')
+    expect(result).toContain('id="b"')
+    expect(result.indexOf('id="a"')).toBeLessThan(result.indexOf('id="b"'))
   })
 })

@@ -68,8 +68,11 @@ export function buildIconMeta(
   absoluteFilePath: string,
   componentPrefix: string,
 ): IconMeta {
-  const base = sanitizeFilename(filename)
+  const isRaw = filename.endsWith('.raw.svg')
+  // Strip .raw before .svg so the icon id is 'home', not 'home-raw'
+  const effectiveName = isRaw ? filename.slice(0, -8) + '.svg' : filename
+  const base = sanitizeFilename(effectiveName)
   const id = segments.length === 0 ? base : `${segments.join('-')}-${base}`
   const componentName = componentPrefix + toPascalCase(id)
-  return { id, componentName, absolutePath: absoluteFilePath }
+  return { id, componentName, absolutePath: absoluteFilePath, raw: isRaw || undefined }
 }

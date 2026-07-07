@@ -1,5 +1,7 @@
 import { promises as fsp } from 'node:fs'
 import path from 'node:path'
+import { relative, normalize as normalizePath } from 'pathe'
+import { glob } from 'tinyglobby'
 
 export interface WalkerEntry {
   /** folder path segments relative to inputDir root */
@@ -12,52 +14,58 @@ export interface WalkerLogger {
   warn(msg: string): void
 }
 
-async function walk(
-  dir: string,
-  segments: string[],
-  result: Map<string, WalkerEntry>,
-  logger?: WalkerLogger,
-): Promise<void> {
-  const entries = await fsp
-    .readdir(dir, { withFileTypes: true, encoding: 'utf8' })
-    .catch((err: Error) => {
-      logger?.warn(`Cannot read directory "${dir}": ${err.message}`)
-      return null
-    })
-  if (!entries) return
-
-  // Use null-byte separator to avoid collisions with folder names
-  const key = segments.length === 0 ? '\0' : segments.join('\0')
-
-  for (const entry of entries) {
-    if (entry.isSymbolicLink()) continue
-
-    const fullPath = path.join(dir, entry.name)
-
-    if (entry.isFile() && entry.name.endsWith('.svg')) {
-      if (!result.has(key)) {
-        result.set(key, { segments: segments.slice(), files: [] })
-      }
-      result.get(key)!.files.push(fullPath)
-    }
-    else if (entry.isDirectory()) {
-      // "default/" at the root level merges its direct SVGs into the default collection
-      if (segments.length === 0 && entry.name === 'default') {
-        await walk(fullPath, [], result, logger)
-      }
-      else {
-        await walk(fullPath, [...segments, entry.name], result, logger)
-      }
-    }
-  }
-}
+const IGNORE_DIRS = ['node_modules', 'dist', 'build', 'coverage', 'test', 'tests']
 
 /**
  * Walks inputDir and groups .svg files by their collection (parent folder segments).
  * Returns one WalkerEntry per distinct collection; entries with no files are omitted.
+ * Symlinks and node_modules/dist/build/coverage/test dirs are excluded.
  */
 export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Promise<WalkerEntry[]> {
+  try {
+    await fsp.access(inputDir)
+  }
+  catch (err: unknown) {
+    logger?.warn(`Cannot read directory "${inputDir}": ${(err as Error).message}`)
+    return []
+  }
+
+  const files = await glob(['**/*.svg'], {
+    cwd: inputDir,
+    onlyFiles: true,
+    absolute: true,
+    followSymbolicLinks: false,
+    ignore: IGNORE_DIRS,
+  })
+
   const result = new Map<string, WalkerEntry>()
-  await walk(inputDir, [], result, logger)
+
+  const normalizedInputDir = normalizePath(inputDir)
+
+  for (const absPath of files) {
+    const rel = relative(normalizedInputDir, absPath) // always forward-slashes via pathe
+    const parts = rel.split('/')
+    parts.pop() // remove filename
+
+    let segments: string[]
+    if (parts.length > 0 && parts[0] === 'default') {
+      // 'default/' at root merges direct files into the default collection;
+      // deeper subdirs under 'default/' become named collections (without the 'default' prefix).
+      segments = parts.slice(1)
+    }
+    else {
+      segments = parts
+    }
+
+    const key = segments.length === 0 ? '\0' : segments.join('\0')
+
+    if (!result.has(key)) {
+      result.set(key, { segments: segments.slice(), files: [] })
+    }
+    // Normalize to platform-native separator so callers can compare against
+    // paths obtained from node:path (which uses backslashes on Windows).
+    result.get(key)!.files.push(path.normalize(absPath))
+  }
+
   return Array.from(result.values())
 }

@@ -99,21 +99,24 @@ export async function buildAllSprites(
 }
 
 /**
- * Compiles an SVG sprite from the given icons.
- * Uses icon.id as the symbol id so that collection-prefixed ids (e.g. "admin-star")
- * are preserved regardless of the actual filename.
+ * Merges two compiled sprite strings by extracting `<symbol>` elements from
+ * `secondary` and appending them to `primary` before the closing `</svg>`.
+ * Exported for unit testing.
  */
-export async function buildSprite(
+export function mergeSprites(primary: string, secondary: string): string {
+  if (!primary) return secondary
+  if (!secondary) return primary
+  const symbols = secondary.match(/<symbol[\s\S]*?<\/symbol>/g) ?? []
+  if (symbols.length === 0) return primary
+  return primary.replace('</svg>', `${symbols.join('\n')}\n</svg>`)
+}
+
+async function compileSpriteFromIcons(
   icons: IconMeta[],
   spriteOptions: SpriteConfig,
   optimizeFiles: boolean,
   logger: SpriteLogger,
 ): Promise<string> {
-  if (icons.length === 0) {
-    logger.warn('No icons found in collection — sprite skipped.')
-    return ''
-  }
-
   const config = buildSpriteConfig(spriteOptions, optimizeFiles)
   const spriter = new SVGSprite(config)
 
@@ -126,4 +129,36 @@ export async function buildSprite(
 
   const { result } = await spriter.compileAsync()
   return extractSprite(result, logger)
+}
+
+/**
+ * Compiles an SVG sprite from the given icons.
+ * Uses icon.id as the symbol id so that collection-prefixed ids (e.g. "admin-star")
+ * are preserved regardless of the actual filename.
+ * Icons flagged with `raw: true` (*.raw.svg files) skip SVGO optimization.
+ */
+export async function buildSprite(
+  icons: IconMeta[],
+  spriteOptions: SpriteConfig,
+  optimizeFiles: boolean,
+  logger: SpriteLogger,
+): Promise<string> {
+  if (icons.length === 0) {
+    logger.warn('No icons found in collection — sprite skipped.')
+    return ''
+  }
+
+  const rawIcons = icons.filter(i => i.raw)
+
+  if (rawIcons.length === 0) {
+    return compileSpriteFromIcons(icons, spriteOptions, optimizeFiles, logger)
+  }
+
+  const normalIcons = icons.filter(i => !i.raw)
+  const normalPart = normalIcons.length > 0
+    ? await compileSpriteFromIcons(normalIcons, spriteOptions, optimizeFiles, logger)
+    : ''
+  const rawPart = await compileSpriteFromIcons(rawIcons, spriteOptions, false, logger)
+
+  return mergeSprites(normalPart, rawPart)
 }

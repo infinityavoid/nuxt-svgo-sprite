@@ -20,11 +20,29 @@ export function buildIconTypesContent(collections: SpriteCollection[]): string {
   for (const col of collections) {
     const ids = col.icons.map(i => JSON.stringify(i.id))
     const typeValue = ids.length > 0 ? ids.join(' | ') : 'never'
+    const exampleId = col.icons[0]?.id ?? `${col.name}-icon`
+    lines.push(
+      `/** Available icon ids in the "${col.name}" collection.\n`
+      + ` * @example\n`
+      + ` * \`\`\`vue\n`
+      + ` * <${col.spriteComponentName} />\n`
+      + ` * <svg><use href="#${exampleId}" /></svg>\n`
+      + ` * \`\`\`\n`
+      + ` */`,
+    )
     lines.push(`export type ${col.typeName} = ${typeValue}`)
     typeNames.push(col.typeName)
   }
 
   const unionValue = typeNames.length > 0 ? typeNames.join(' | ') : 'never'
+  lines.push(
+    `/** Union of all icon ids across every collection.\n`
+    + ` * @example\n`
+    + ` * \`\`\`vue\n`
+    + ` * <SvgUse name="home" width="24" height="24" />\n`
+    + ` * \`\`\`\n`
+    + ` */`,
+  )
   lines.push(`export type AllIconName = ${unionValue}`)
 
   return lines.join('\n') + '\n'
@@ -83,6 +101,12 @@ import type { AllIconName } from '#build/nuxt-svgo-sprite/icon-names'
 
 defineOptions({ inheritAttrs: false })
 
+/**
+ * @example
+ * \`\`\`vue
+ * <SvgUse name="home" width="24" height="24" />
+ * \`\`\`
+ */
 defineProps<{ name: AllIconName }>()
 </script>
 `,

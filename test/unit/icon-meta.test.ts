@@ -145,4 +145,22 @@ describe('buildIconMeta', () => {
     const meta = buildIconMeta('star.svg', ['admin'], '/abs/admin/star.svg', 'Icon')
     expect(meta.componentName).toBe('IconAdminStar')
   })
+
+  it('.raw.svg: sets raw=true and strips .raw from id', () => {
+    const meta = buildIconMeta('home.raw.svg', [], '/abs/home.raw.svg', 'Use')
+    expect(meta.id).toBe('home')
+    expect(meta.componentName).toBe('UseHome')
+    expect(meta.raw).toBe(true)
+  })
+
+  it('.raw.svg in named collection: id prefix is unchanged', () => {
+    const meta = buildIconMeta('star.raw.svg', ['admin'], '/abs/admin/star.raw.svg', 'Use')
+    expect(meta.id).toBe('admin-star')
+    expect(meta.raw).toBe(true)
+  })
+
+  it('regular .svg has raw=undefined', () => {
+    const meta = buildIconMeta('home.svg', [], '/abs/home.svg', 'Use')
+    expect(meta.raw).toBeUndefined()
+  })
 })
