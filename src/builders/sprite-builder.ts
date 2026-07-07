@@ -71,8 +71,8 @@ export function buildSpriteConfig(spriteOptions: SpriteConfig, optimizeFiles: bo
  * Returns an empty string and logs an error if the result is malformed.
  */
 export function extractSprite(result: unknown, logger: Pick<SpriteLogger, 'error'>): string {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const contents = (result as any)?.symbol?.sprite?.contents?.toString()
+  const contents = (result as { symbol?: { sprite?: { contents?: { toString(): string } } } })
+    ?.symbol?.sprite?.contents?.toString()
   if (!contents) {
     logger.error('Failed to extract sprite from svg-sprite result. Check your spriteOptions.')
     return ''
