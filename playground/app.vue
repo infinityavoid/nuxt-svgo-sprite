@@ -36,6 +36,19 @@
       </div>
     </section>
 
+    <!-- ── Raw icon opt-out ──────────────────────────────────────────── -->
+    <section style="margin-top: 2rem">
+      <h2>Raw icon (<code>logo.raw.svg</code>)</h2>
+      <p>
+        Renamed to <code>.raw.svg</code> — SVGO is skipped, original content preserved.
+        The id and component name are the same as for a regular <code>.svg</code> file.
+      </p>
+      <div style="display: flex; gap: 1rem; align-items: center">
+        <SvgUse name="logo" width="48" height="48" stroke="tomato" />
+        <IconLogo width="48" height="48" stroke="royalblue" />
+      </div>
+    </section>
+
     <!-- ── Per-icon wrappers ───────────────────────────────────────────── -->
     <section style="margin-top: 2rem">
       <h2>Per-icon wrapper components (<code>createUseComponents: true</code>)</h2>

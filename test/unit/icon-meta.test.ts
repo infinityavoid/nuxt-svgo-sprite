@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  sanitizeSegment,
   sanitizeFilename,
   toPascalCase,
   deriveCollectionName,
@@ -7,6 +8,32 @@ import {
   deriveSpriteComponentName,
   buildIconMeta,
 } from '../../src/utils/icon-meta'
+
+describe('sanitizeSegment', () => {
+  it('lowercases the segment', () => {
+    expect(sanitizeSegment('Admin')).toBe('admin')
+  })
+  it('replaces underscores with hyphens', () => {
+    expect(sanitizeSegment('my_folder')).toBe('my-folder')
+  })
+  it('replaces spaces with hyphens', () => {
+    expect(sanitizeSegment('admin buttons')).toBe('admin-buttons')
+  })
+  it('collapses consecutive special chars to one hyphen', () => {
+    expect(sanitizeSegment('a__b  c')).toBe('a-b-c')
+  })
+  it('trims leading and trailing hyphens', () => {
+    expect(sanitizeSegment('--admin--')).toBe('admin')
+  })
+  it('returns empty string for all-special input', () => {
+    expect(sanitizeSegment('@@@')).toBe('')
+    expect(sanitizeSegment('___')).toBe('')
+  })
+  it('passes through already clean segments', () => {
+    expect(sanitizeSegment('admin')).toBe('admin')
+    expect(sanitizeSegment('admin-buttons')).toBe('admin-buttons')
+  })
+})
 
 describe('sanitizeFilename', () => {
   it('strips .svg and lowercases', () => {

@@ -1,8 +1,9 @@
 import os from 'node:os'
 import path from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { findOwningCollection, handleWatchEvent } from '../../src/watcher/watcher'
+import { findOwningCollection, handleWatchEvent, setupWatcher } from '../../src/watcher/watcher'
 import type { SpriteCollection } from '../../src/types/types'
+import type { Nuxt } from '@nuxt/schema'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -125,5 +126,82 @@ describe('handleWatchEvent', () => {
     await handleWatchEvent('change', '/icons/admin/star.svg', col, mockLogger, onChange)
     await handleWatchEvent('add', '/icons/admin/star.svg', col, mockLogger, onChange)
     expect(mockLogger.warn).not.toHaveBeenCalled()
+  })
+})
+
+// ── setupWatcher ──────────────────────────────────────────────────────────────
+
+describe('setupWatcher', () => {
+  type MockNuxt = Nuxt & { triggerWatch: (event: string, relativePath: string) => Promise<void> }
+
+  function makeMockNuxt(rootDir: string): MockNuxt {
+    const hookHandlers: Record<string, (event: string, relativePath: string) => Promise<void>> = {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return {
+      options: { rootDir },
+      hook: vi.fn((name: string, handler: (event: string, relativePath: string) => Promise<void>) => {
+        hookHandlers[name] = handler
+      }),
+      triggerWatch: async (event: string, relativePath: string) => {
+        await hookHandlers['builder:watch']?.(event, relativePath)
+      },
+    } as unknown as MockNuxt
+  }
+
+  it('routes change event in known collection to onCollectionChange', async () => {
+    const rootDir = iconRoot
+    const nuxt = makeMockNuxt(rootDir)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, collections, mockLogger, onChange)
+
+    await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'home.svg')))
+    await new Promise(r => setTimeout(r, 150))
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange.mock.calls[0]![0].name).toBe('default')
+  })
+
+  it('warns and does not call onCollectionChange for SVG outside known collections', async () => {
+    const rootDir = iconRoot
+    const nuxt = makeMockNuxt(rootDir)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, collections, mockLogger, onChange)
+
+    // Construct a relative path that resolves OUTSIDE all known collection dirs
+    const outsideAbs = path.join(os.tmpdir(), 'completely-outside', 'icon.svg')
+    const outsideRel = path.relative(iconRoot, outsideAbs)
+    await nuxt.triggerWatch('add', outsideRel)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(mockLogger.warn).toHaveBeenCalledOnce()
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Restart'))
+  })
+
+  it('does not call onCollectionChange for non-SVG files', async () => {
+    const rootDir = iconRoot
+    const nuxt = makeMockNuxt(rootDir)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, collections, mockLogger, onChange)
+
+    await nuxt.triggerWatch('change', 'assets/icons/readme.md')
+    expect(onChange).not.toHaveBeenCalled()
+    expect(mockLogger.warn).not.toHaveBeenCalled()
+  })
+
+  it('changes in collection A do not trigger rebuild of collection B', async () => {
+    const rootDir = iconRoot
+    const nuxt = makeMockNuxt(rootDir)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, collections, mockLogger, onChange)
+
+    await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'admin', 'star.svg')))
+    await new Promise(r => setTimeout(r, 150))
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange.mock.calls[0]![0].name).toBe('admin')
+  })
+
+  it('returns a cleanup function that cancels all debounced handlers', () => {
+    const nuxt = makeMockNuxt(iconRoot)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    const cleanup = setupWatcher(nuxt, collections, mockLogger, onChange)
+    expect(() => cleanup()).not.toThrow()
   })
 })

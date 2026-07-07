@@ -1,6 +1,20 @@
 import type { IconMeta } from '../types/types'
 
 /**
+ * Normalizes a single folder-path segment to a valid id fragment:
+ * lowercase, replace non-letter/digit/hyphen chars with hyphens,
+ * collapse consecutive hyphens, trim leading/trailing hyphens.
+ * Returns an empty string when the input has no usable characters.
+ */
+export function sanitizeSegment(segment: string): string {
+  return segment
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/**
  * Strips .svg extension, lowercases, replaces non-letter/digit/hyphen chars
  * with hyphens, collapses consecutive hyphens, trims leading/trailing hyphens.
  */

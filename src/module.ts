@@ -26,7 +26,7 @@ export default defineNuxtModule<ModuleOptions>({
   },
 
   defaults: {
-    inputDir: './assets/icons',
+    inputDir: '~/assets/icons',
     createUseComponents: false,
     componentPrefix: 'Use',
     optimizeFiles: true,

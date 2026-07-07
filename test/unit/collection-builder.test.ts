@@ -107,12 +107,13 @@ describe('buildCollectionsFromDir', () => {
   })
 
   it('warns and skips second icon on id collision within a collection', async () => {
-    // Both normalize to id 'home'
+    // Both normalize to id 'home'; home_.svg also triggers a sanitization warn
     await writeSvg('home.svg')
     await writeSvg('home_.svg')
     const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
 
-    expect(mockLogger.warn).toHaveBeenCalledOnce()
+    // Expects at least the collision warn (home_.svg also triggers a sanitization warn)
+    expect(mockLogger.warn).toHaveBeenCalledTimes(2)
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('collision'))
     expect(cols[0]!.icons).toHaveLength(1)
   })
@@ -127,5 +128,46 @@ describe('buildCollectionsFromDir', () => {
     await writeSvg('star.svg')
     const cols = await buildCollectionsFromDir(tmpDir, 'Icon', mockLogger)
     expect(cols[0]!.icons[0]!.componentName).toBe('IconStar')
+  })
+
+  it('folder with uppercase name: id and collection name are lowercased', async () => {
+    await writeSvg('Admin', 'star.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('admin')
+    expect(cols[0]!.icons[0]!.id).toBe('admin-star')
+  })
+
+  it('folder with underscores: normalized to hyphens in id', async () => {
+    await writeSvg('my_folder', 'star.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('myFolder')
+    expect(cols[0]!.icons[0]!.id).toBe('my-folder-star')
+  })
+
+  it('folder with spaces: normalized to hyphens in id', async () => {
+    await writeSvg('admin buttons', 'star.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('adminButtons')
+    expect(cols[0]!.icons[0]!.id).toBe('admin-buttons-star')
+  })
+
+  it('folder with only special chars: warns and skips the entry', async () => {
+    await writeSvg('@@@', 'star.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols).toHaveLength(0)
+    expect(mockLogger.warn).toHaveBeenCalledOnce()
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('@@@'))
+  })
+
+  it('filename with non-standard chars: warns about normalization', async () => {
+    await writeSvg('My Icon.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols).toHaveLength(1)
+    expect(mockLogger.warn).toHaveBeenCalledOnce()
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('My Icon.svg'))
+    expect(cols[0]!.icons[0]!.id).toBe('my-icon')
   })
 })

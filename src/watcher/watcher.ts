@@ -81,7 +81,12 @@ export function setupWatcher(
 
     const absPath = path.resolve(nuxt.options.rootDir, relativePath)
     const collection = findOwningCollection(absPath, collections)
-    if (!collection) return
+    if (!collection) {
+      logger.warn(
+        `SVG changed outside known collections ("${relativePath}"). Restart the dev server to pick up new collections.`,
+      )
+      return
+    }
 
     const handler = handlers.get(collection.name)
     if (handler) await handler(event, absPath)

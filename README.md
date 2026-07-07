@@ -161,6 +161,41 @@ Sprites are injected before `#__nuxt` in the rendered HTML, outside Vue's hydrat
 
 When `autoInjectSprite: false` (the default), a dev-mode notice lists the sprite component names you need to add.
 
+## SVGO opt-out per icon
+
+Rename any icon file to `*.raw.svg` to include it in the sprite **without SVGO optimization**. This is useful for icons that rely on features SVGO's default preset removes (XML comments, certain attributes, animation data):
+
+```
+assets/icons/
+  home.svg          ← optimized normally
+  logo.raw.svg      ← included as-is, SVGO skipped
+```
+
+The generated id and component name are the same as for a regular `.svg` file — the `.raw` suffix is transparent to consumers:
+
+```vue
+<SvgUse name="logo" width="64" height="64" />
+```
+
+## Styling icons
+
+Generated components emit a plain `<svg>` with no injected classes, inline styles, or wrapper elements. Size and color are controlled entirely by the consumer:
+
+```vue
+<!-- via HTML attributes -->
+<SvgUse name="home" width="24" height="24" stroke="currentColor" />
+
+<!-- via CSS -->
+<SvgUse name="home" class="icon icon--lg" />
+```
+
+```css
+.icon        { width: 1.5rem; height: 1.5rem; }
+.icon--lg    { width: 2rem; height: 2rem; }
+```
+
+All standard SVG presentation attributes (`fill`, `stroke`, `stroke-width`, `color`, etc.) are forwarded directly to the inner `<svg>` element via Vue's `v-bind="$attrs"`.
+
 ## TypeScript types
 
 The module generates `#build/nuxt-svgo-sprite/icon-names.d.ts` and registers it in your Nuxt `tsconfig` automatically (via `prepare:types`). No imports needed:
@@ -191,7 +226,7 @@ export default defineNuxtConfig({
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `inputDir` | `string` | `'./assets/icons'` | Root folder scanned for SVG files. `~` aliases are supported. |
+| `inputDir` | `string` | `'~/assets/icons'` | Root folder scanned for SVG files. `~` aliases are supported. |
 | `optimizeFiles` | `boolean` | `true` | Pass each SVG through SVGO before adding it to the sprite. |
 | `createUseComponents` | `boolean` | `false` | Generate a wrapper component per icon. |
 | `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
