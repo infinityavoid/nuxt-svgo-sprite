@@ -28,6 +28,7 @@ export interface RebuildContext {
   injectTemplateName: string | undefined
   injectedCollectionNames: Set<string>
   logger: RebuildLogger
+  broadcastRefresh?: () => Promise<void>
 }
 
 export function createRebuildHandler(ctx: RebuildContext) {
@@ -70,5 +71,7 @@ export function createRebuildHandler(ctx: RebuildContext) {
         ctx.logger.info(`Registered new component <${newIcon.componentName} />.`)
       }
     }
+
+    await ctx.broadcastRefresh?.()
   }
 }

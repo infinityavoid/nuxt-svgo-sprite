@@ -12,6 +12,7 @@ import { setupWatcher } from './watcher/watcher'
 import { buildIconTypesContent, setupTemplates } from './templates/templates'
 import { resolveInjectCollections, setupAutoInject } from './plugins/auto-inject'
 import { createRebuildHandler } from './setup/rebuild'
+import { setupDevtools } from './devtools/devtools'
 import type { ModuleOptions } from './types/types'
 
 export type { ModuleOptions } from './types/types'
@@ -93,6 +94,11 @@ export default defineNuxtModule<ModuleOptions>({
       }
     }
 
+    let broadcastRefresh: (() => Promise<void>) | undefined
+    if (nuxt.options.dev) {
+      broadcastRefresh = setupDevtools(nuxt, collectionsRef, injectedCollectionNames)
+    }
+
     const cleanup = setupWatcher(
       nuxt,
       collections,
@@ -111,6 +117,7 @@ export default defineNuxtModule<ModuleOptions>({
         injectTemplateName,
         injectedCollectionNames,
         logger,
+        broadcastRefresh,
       }),
     )
 
