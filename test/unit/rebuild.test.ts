@@ -48,7 +48,7 @@ function makeCtx(overrides: Partial<RebuildContext> = {}): RebuildContext {
   return {
     options: {
       componentPrefix: 'Use',
-      spriteOptions: {},
+      svgoConfig: {},
       optimizeFiles: true,
       createUseComponents: false,
     },
@@ -131,7 +131,7 @@ describe('createRebuildHandler', () => {
       options: {
         componentPrefix: 'Use',
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        spriteOptions: {} as any,
+        svgoConfig: {} as any,
         optimizeFiles: true,
         createUseComponents: true,
       },
@@ -153,7 +153,7 @@ describe('createRebuildHandler', () => {
       options: {
         componentPrefix: 'Use',
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        spriteOptions: {} as any,
+        svgoConfig: {} as any,
         optimizeFiles: true,
         createUseComponents: true,
       },

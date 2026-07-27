@@ -1,5 +1,5 @@
 import { updateTemplates } from '@nuxt/kit'
-import type { Config as SpriteConfig } from 'svg-sprite'
+import type { Config as SvgoConfig } from 'svgo'
 import { rebuildSingleCollection } from '../builders/collection-builder'
 import { buildSprite } from '../builders/sprite-builder'
 import { buildIconTypesContent, registerUseComponent } from '../templates/templates'
@@ -8,7 +8,7 @@ import type { TemplateHandles } from '../templates/templates'
 
 interface RebuildOptions {
   componentPrefix: string
-  spriteOptions: SpriteConfig
+  svgoConfig: SvgoConfig
   optimizeFiles: boolean
   createUseComponents: boolean
 }
@@ -47,7 +47,7 @@ export function createRebuildHandler(ctx: RebuildContext) {
       collection.name,
       await buildSprite(
         updatedCol.icons,
-        ctx.options.spriteOptions,
+        ctx.options.svgoConfig,
         ctx.options.optimizeFiles,
         ctx.logger,
       ),

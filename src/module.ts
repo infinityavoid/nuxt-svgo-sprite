@@ -6,7 +6,7 @@ import {
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { version } from '../package.json'
-import { defaultSpriteConfig, buildAllSprites } from './builders/sprite-builder'
+import { defaultSvgoConfig, buildAllSprites } from './builders/sprite-builder'
 import { buildCollectionsFromDir } from './builders/collection-builder'
 import { setupWatcher } from './watcher/watcher'
 import { buildIconTypesContent, setupTemplates } from './templates/templates'
@@ -30,7 +30,7 @@ export default defineNuxtModule<ModuleOptions>({
     createUseComponents: false,
     componentPrefix: 'Use',
     optimizeFiles: true,
-    spriteOptions: defaultSpriteConfig,
+    svgoConfig: defaultSvgoConfig,
     autoInjectSprite: false,
   },
 
@@ -62,7 +62,7 @@ export default defineNuxtModule<ModuleOptions>({
 
     const spriteContents = await buildAllSprites(
       collections,
-      options.spriteOptions!,
+      options.svgoConfig!,
       options.optimizeFiles!,
       logger,
     )
@@ -106,7 +106,7 @@ export default defineNuxtModule<ModuleOptions>({
       createRebuildHandler({
         options: {
           componentPrefix: options.componentPrefix!,
-          spriteOptions: options.spriteOptions!,
+          svgoConfig: options.svgoConfig!,
           optimizeFiles: options.optimizeFiles!,
           createUseComponents: options.createUseComponents!,
         },

@@ -1,4 +1,4 @@
-import type { Config as SpriteConfig } from 'svg-sprite'
+import type { Config as SvgoConfig } from 'svgo'
 
 export interface IconMeta {
   /** globally unique symbol id, e.g. "admin-star" */
@@ -62,7 +62,7 @@ export interface ModuleOptions {
   autoInjectSprite?: boolean | string[]
 
   /**
-   * Custom svg-sprite configuration, deep-merged over built-in defaults by Nuxt.
+   * Custom SVGO configuration, deep-merged over built-in defaults by Nuxt.
    */
-  spriteOptions?: SpriteConfig
+  svgoConfig?: SvgoConfig
 }
