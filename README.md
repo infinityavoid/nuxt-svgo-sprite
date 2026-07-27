@@ -13,7 +13,7 @@ Nuxt 3 module that auto-discovers SVG collections from your folder structure, ge
 - **Universal `<SvgUse>` component** — reference any icon across all collections by name
 - **`autoInjectSprite`** — optionally inject sprites into every SSR page without touching your templates
 - **Typed icon names** — `DefaultIconName`, `AdminIconName`, `AllIconName` — generated from actual `.svg` filenames
-- **SVGO optimization** built in via `svg-sprite`
+- **SVGO v4 optimization** built in — direct pipeline, no extra dependencies
 - **HMR support** — dev server rebuilds sprites on file add/change/remove
 - **Optional per-icon wrapper components** — `<UseHome />`, `<IconAdminUser />`, etc.
 - **SSR-friendly** — sprites are inlined into the HTML, no layout shift
@@ -219,7 +219,7 @@ export default defineNuxtConfig({
     createUseComponents: false,
     componentPrefix: 'Use',
     autoInjectSprite: false,
-    spriteOptions: {},
+    svgoConfig: {},
   },
 })
 ```
@@ -227,11 +227,11 @@ export default defineNuxtConfig({
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `inputDir` | `string` | `'~/assets/icons'` | Root folder scanned for SVG files. `~` aliases are supported. |
-| `optimizeFiles` | `boolean` | `true` | Pass each SVG through SVGO before adding it to the sprite. |
+| `optimizeFiles` | `boolean` | `true` | Pass each SVG through SVGO before adding it to the sprite. Set `false` to skip optimization globally. |
 | `createUseComponents` | `boolean` | `false` | Generate a wrapper component per icon. |
 | `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
 | `autoInjectSprite` | `boolean \| string[]` | `false` | Inject sprite(s) into every SSR page automatically. |
-| `spriteOptions` | `SpriteConfig` | internal defaults | Deep-merged over the built-in `svg-sprite` configuration. |
+| `svgoConfig` | `SvgoConfig` | internal defaults | Deep-merged over the built-in SVGO configuration. See [SVGO docs](https://svgo.dev) for available plugins. |
 
 ## Migrating from v2
 
@@ -240,11 +240,29 @@ export default defineNuxtConfig({
 | `<SvgSprite />` | `<DefaultSprite />` (named collections: `<AdminSprite />`, etc.) |
 | `SvgIconName` | `DefaultIconName` (or `AllIconName` to cover all collections) |
 | `componentPrefix: 'use'` | `componentPrefix: 'Use'` (capital U is the new default) |
+| `spriteOptions: SpriteConfig` | `svgoConfig: SvgoConfig` — direct SVGO config, no svg-sprite wrapper |
+| `optimizeFiles: false` | Unchanged — still disables SVGO optimization globally |
 | Root-level `*.svg` files | Unchanged — still the default collection |
 | No subfolder support | Subfolders auto-create named collections |
 | `icon.svg` → id `"icon"` | Root files unchanged; `admin/icon.svg` → id `"admin-icon"` |
 
 There is no `collections: Record<string, string>` config key. Collections are discovered from the folder structure automatically.
+
+**`spriteOptions` migration:** the `spriteOptions` key no longer exists (v3 removes `svg-sprite`). If you passed custom SVGO plugins via `spriteOptions.shape.transform`, move them directly to `svgoConfig.plugins`:
+
+```ts
+// v2
+spriteOptions: {
+  shape: { transform: [{ svgo: { plugins: [{ name: 'removeViewBox', active: false }] } }] }
+}
+
+// v3
+svgoConfig: {
+  plugins: [{ name: 'preset-default', params: { overrides: { removeViewBox: false } } }]
+}
+```
+
+svg-sprite-specific keys (`mode`, `svg.rootAttributes`, `shape.*`) have no v3 equivalent — these are handled internally.
 
 ## Development
 
