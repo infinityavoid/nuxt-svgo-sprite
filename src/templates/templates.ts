@@ -98,6 +98,7 @@ export function setupTemplates(
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore Nuxt resolves this alias in consumer app context.
 import type { AllIconName } from '#build/nuxt-svgo-sprite/icon-names'
+import { onMounted, watch } from 'vue'
 
 defineOptions({ inheritAttrs: false })
 
@@ -107,7 +108,26 @@ defineOptions({ inheritAttrs: false })
  * <SvgUse name="home" width="24" height="24" />
  * \`\`\`
  */
-defineProps<{ name: AllIconName }>()
+const props = defineProps<{ name: AllIconName }>()
+
+// Dev-only: a symbol whose sprite component isn't mounted (yet, or at all — e.g. an
+// autoInjectSprite collection list that doesn't include this icon's collection)
+// renders an empty <use> with no error anywhere. One console warning turns that into
+// a one-line diagnosis instead of a silent blank icon. Stripped from production
+// builds via import.meta.dev.
+if (import.meta.dev) {
+  const checkSymbolMounted = () => {
+    if (!document.getElementById(props.name)) {
+      console.warn(
+        \`[nuxt-svgo-sprite] <SvgUse name="\${props.name}"> — no <symbol id="\${props.name}"> found in the DOM. \`
+        + 'Make sure the sprite component that contains it is mounted before this <SvgUse> '
+        + '(see "Mount order" in the README), or that its collection is covered by autoInjectSprite.',
+      )
+    }
+  }
+  onMounted(checkSymbolMounted)
+  watch(() => props.name, checkSymbolMounted)
+}
 </script>
 `,
     write: true,
