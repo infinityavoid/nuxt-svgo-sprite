@@ -2,7 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { buildCollectionsFromDir } from '../../src/builders/collection-builder'
+import { buildCollectionsFromDir, rebuildSingleCollection } from '../../src/builders/collection-builder'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>'
 
@@ -80,6 +80,24 @@ describe('buildCollectionsFromDir', () => {
     expect(col!.segments).toEqual(['admin', 'buttons'])
     expect(col!.icons[0]!.id).toBe('admin-buttons-close')
     expect(col!.icons[0]!.componentName).toBe('UseAdminButtonsClose')
+  })
+
+  it('a subfolder nested under default/ gets an inputDir that actually exists on disk', async () => {
+    // Regression: walkInputDir strips the leading "default" segment for NAMING
+    // purposes (default/sub/icon.svg -> segments ["sub"]), but rejoining just those
+    // segments onto the root used to point inputDir at "<root>/sub" — a directory
+    // that was never created — instead of the real "<root>/default/sub". That broke
+    // the watcher (it could never find this collection's files again) and HMR
+    // rebuilds (rebuildSingleCollection would read a nonexistent dir and silently
+    // return zero icons).
+    await writeSvg('default', 'sub', 'icon.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('sub')
+    const realDir = path.join(tmpDir, 'default', 'sub')
+    expect(cols[0]!.inputDir).toBe(realDir)
+    await expect(fsp.access(cols[0]!.inputDir)).resolves.toBeUndefined()
   })
 
   it('multiple subfolders produce multiple independent collections', async () => {
@@ -169,5 +187,135 @@ describe('buildCollectionsFromDir', () => {
     expect(mockLogger.warn).toHaveBeenCalledOnce()
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('My Icon.svg'))
     expect(cols[0]!.icons[0]!.id).toBe('my-icon')
+  })
+
+  it('a filename with no usable characters after normalization is skipped with a warning', async () => {
+    await writeSvg('звезда.svg')
+    await writeSvg('home.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.icons).toHaveLength(1)
+    expect(cols[0]!.icons[0]!.id).toBe('home')
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('звезда.svg'))
+  })
+
+  it('two folders that sanitize to the same collection name: the later one is skipped with a warning', async () => {
+    await writeSvg('admin-icons', 'star.svg')
+    await writeSvg('admin_icons', 'close.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('adminIcons')
+    expect(cols[0]!.icons).toHaveLength(1)
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Collection name collision'))
+  })
+
+  it('a folder named "Default" (any case) merges into the default collection like "default" does — no icons lost, no collision', async () => {
+    // Regression: this used to reach the cross-collection name-collision pass, which
+    // (before the case-insensitive fix in utils/fs.ts) dropped ALL root-level icons,
+    // not the "Default" folder's — an unrecoverable data-loss regression, since the
+    // warning told the user to "rename (root)", which isn't a folder they can rename.
+    await writeSvg('home.svg')
+    await writeSvg('Default', 'extra.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('default')
+    expect(cols[0]!.icons.map(i => i.id).sort()).toEqual(['extra', 'home'])
+    expect(mockLogger.warn).not.toHaveBeenCalled()
+  })
+
+  it('root icons survive a genuine collection-name collision — the root always wins, the other folder is skipped', async () => {
+    // A collision that ISN'T resolved by the default/-merge rule above (e.g. two
+    // differently-cased/spelled names that both sanitize to a name equal to root's
+    // "default") must never silently drop root-level icons — that's unrecoverable,
+    // since there's no "(root)" folder a user could rename to fix it.
+    await writeSvg('home.svg')
+    await writeSvg('  Default  ', 'extra.svg') // sanitizes to "default" too, via a path fs.ts's literal check misses
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    const defaultCol = cols.find(c => c.name === 'default')!
+    expect(defaultCol.icons.map(i => i.id)).toEqual(['home'])
+    const [message] = mockLogger.warn.mock.calls[0]!
+    expect(message).toContain('Collection name collision')
+    // The instruction must point at the renameable folder, never at "(root)".
+    expect(message).toMatch(/Rename "\s*Default\s*"/)
+    expect(message).not.toMatch(/Rename "\(root\)"/)
+  })
+
+  it('two collections whose icons derive the same symbol id: the later icon is skipped with a warning', async () => {
+    await writeSvg('admin', 'star.svg')
+    await writeSvg('admin-star.svg') // root file, id "admin-star" — collides with admin/star.svg
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    const allIds = cols.flatMap(c => c.icons.map(i => i.id))
+    expect(allIds.filter(id => id === 'admin-star')).toHaveLength(1)
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Symbol id collision'))
+  })
+})
+
+describe('rebuildSingleCollection', () => {
+  it('reflects an added file the same way a cold build would', async () => {
+    await writeSvg('admin', 'star.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const adminCol = cold.find(c => c.name === 'admin')!
+
+    await writeSvg('admin', 'close.svg')
+    const updated = await rebuildSingleCollection(adminCol, 'Use', mockLogger)
+
+    expect(updated.icons.map(i => i.id).sort()).toEqual(['admin-close', 'admin-star'])
+  })
+
+  it('reflects a removed file the same way a cold build would', async () => {
+    await writeSvg('admin', 'star.svg')
+    const starPath = await writeSvg('admin', 'close.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const adminCol = cold.find(c => c.name === 'admin')!
+
+    await fsp.rm(starPath)
+    const updated = await rebuildSingleCollection(adminCol, 'Use', mockLogger)
+
+    expect(updated.icons.map(i => i.id)).toEqual(['admin-star'])
+  })
+
+  it('a subfolder literally named "default" inside a named collection is NOT reinterpreted as that collection\'s merge folder on rebuild', async () => {
+    // Regression: rebuildSingleCollection used to reuse walkInputDir's root-relative
+    // "default/ merges into default" rule against an arbitrary collection subtree,
+    // misclassifying admin/default/x.svg as a direct file of "admin" after a rebuild
+    // even though a cold build assigns it to the separate "adminDefault" collection.
+    await writeSvg('admin', 'star.svg')
+    await writeSvg('admin', 'default', 'extra.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    const coldAdmin = cold.find(c => c.name === 'admin')!
+    const coldAdminDefault = cold.find(c => c.name === 'adminDefault')!
+    expect(coldAdmin.icons.map(i => i.id)).toEqual(['admin-star'])
+    expect(coldAdminDefault.icons.map(i => i.id)).toEqual(['admin-default-extra'])
+
+    // Touch a file in admin/ to trigger a rebuild of just that collection.
+    const rebuiltAdmin = await rebuildSingleCollection(coldAdmin, 'Use', mockLogger)
+    expect(rebuiltAdmin.icons.map(i => i.id)).toEqual(['admin-star'])
+  })
+
+  it('the default collection still merges inputDir/default/ files on rebuild', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('default', 'extra.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+    expect(defaultCol.icons.map(i => i.id).sort()).toEqual(['extra', 'home'])
+
+    await writeSvg('another.svg')
+    const updated = await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+    expect(updated.icons.map(i => i.id).sort()).toEqual(['another', 'extra', 'home'])
+  })
+
+  it('does not warn when the optional inputDir/default/ merge folder does not exist', async () => {
+    await writeSvg('home.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+    vi.clearAllMocks()
+
+    await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+    expect(mockLogger.warn).not.toHaveBeenCalled()
   })
 })

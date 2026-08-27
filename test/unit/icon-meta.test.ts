@@ -105,6 +105,9 @@ describe('deriveTypeName', () => {
   it('adminButtons → AdminButtonsIconName', () => {
     expect(deriveTypeName('adminButtons')).toBe('AdminButtonsIconName')
   })
+  it('a collection name starting with a digit gets an underscore prefix (valid TS identifier)', () => {
+    expect(deriveTypeName('2fa')).toBe('_2faIconName')
+  })
 })
 
 describe('deriveSpriteComponentName', () => {
@@ -116,6 +119,9 @@ describe('deriveSpriteComponentName', () => {
   })
   it('adminButtons → AdminButtonsSprite', () => {
     expect(deriveSpriteComponentName('adminButtons')).toBe('AdminButtonsSprite')
+  })
+  it('a collection name starting with a digit gets an underscore prefix (valid component name)', () => {
+    expect(deriveSpriteComponentName('2fa')).toBe('_2faSprite')
   })
 })
 
@@ -189,5 +195,17 @@ describe('buildIconMeta', () => {
   it('regular .svg has raw=undefined', () => {
     const meta = buildIconMeta('home.svg', [], '/abs/home.svg', 'Use')
     expect(meta.raw).toBeUndefined()
+  })
+
+  it('uppercase .SVG extension is recognized the same as .svg', () => {
+    const meta = buildIconMeta('HOME.SVG', [], '/abs/HOME.SVG', 'Use')
+    expect(meta.id).toBe('home')
+    expect(meta.componentName).toBe('UseHome')
+  })
+
+  it('uppercase .RAW.SVG extension is recognized as raw', () => {
+    const meta = buildIconMeta('Home.RAW.SVG', [], '/abs/Home.RAW.SVG', 'Use')
+    expect(meta.id).toBe('home')
+    expect(meta.raw).toBe(true)
   })
 })

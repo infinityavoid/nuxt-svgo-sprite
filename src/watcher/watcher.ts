@@ -16,19 +16,30 @@ export type OnCollectionChange = (
 
 /**
  * Returns the collection that owns the given absolute path.
- * When multiple collections match (e.g. default and a named sub-collection),
- * the most specific (deepest inputDir) one wins.
+ * A file belongs to a collection only when it sits DIRECTLY inside that collection's
+ * own folder (segments are collection boundaries — ADR-002, no namespacing within
+ * one collection). A prefix/startsWith match would wrongly route a file in a brand
+ * new, not-yet-known subfolder to its nearest ancestor collection (typically
+ * "default", since its inputDir is the tree root) instead of correctly reporting no
+ * owner. The one exception is the `default/` merge folder (utils/fs.ts): files placed
+ * directly in `<inputDir>/default/` belong to the default collection even though its
+ * own `inputDir` is the tree root, not `<inputDir>/default`.
  */
 export function findOwningCollection(
   absPath: string,
   collections: SpriteCollection[],
 ): SpriteCollection | undefined {
-  const candidates = collections.filter((c) => {
-    // Append sep to avoid matching /icons-extra when inputDir is /icons
-    const prefix = c.inputDir.endsWith(path.sep) ? c.inputDir : c.inputDir + path.sep
-    return absPath.startsWith(prefix) || absPath === c.inputDir
-  })
-  return candidates.sort((a, b) => b.inputDir.length - a.inputDir.length)[0]
+  const dir = path.normalize(path.dirname(absPath))
+
+  const exact = collections.find(c => path.normalize(c.inputDir) === dir)
+  if (exact) return exact
+
+  const defaultCol = collections.find(c => c.segments.length === 0)
+  if (defaultCol && dir === path.normalize(path.join(defaultCol.inputDir, 'default'))) {
+    return defaultCol
+  }
+
+  return undefined
 }
 
 /**
@@ -58,38 +69,52 @@ export async function handleWatchEvent(
  * Registers one debounced builder:watch handler per collection on the Nuxt instance.
  * Rapid changes within one collection are coalesced; changes in different collections
  * fire independently via their own debounced handler.
+ *
+ * `collectionsRef` is read live at event time (not just at setup) — a debounced
+ * handler that closed over its collection at setup time would keep acting on a
+ * stale icon list forever (e.g. ADR-011's delete warning firing from icons that no
+ * longer exist), since only `collectionsRef.current` is updated after a rebuild.
+ * The set of collection NAMES is still fixed at setup (a genuinely new collection
+ * folder requires a restart, by design — see findOwningCollection).
  */
 export function setupWatcher(
   nuxt: Nuxt,
-  collections: SpriteCollection[],
+  collectionsRef: { current: SpriteCollection[] },
+  resolvedInputDir: string,
   logger: WatcherLogger,
   onCollectionChange: OnCollectionChange,
 ): () => void {
+  const inputDirPrefix = resolvedInputDir.endsWith(path.sep) ? resolvedInputDir : resolvedInputDir + path.sep
   const handlers = new Map(
-    collections.map(collection => [
+    collectionsRef.current.map(collection => [
       collection.name,
       debounce(
-        (event: string, absPath: string) =>
-          handleWatchEvent(event, absPath, collection, logger, onCollectionChange),
+        (event: string, absPath: string, currentCollection: SpriteCollection) =>
+          handleWatchEvent(event, absPath, currentCollection, logger, onCollectionChange),
         100,
       ),
     ]),
   )
 
   nuxt.hook('builder:watch', async (event, relativePath) => {
-    if (!relativePath.endsWith('.svg')) return
+    if (!/\.svg$/i.test(relativePath)) return
 
     const absPath = path.resolve(nuxt.options.rootDir, relativePath)
-    const collection = findOwningCollection(absPath, collections)
+    const collection = findOwningCollection(absPath, collectionsRef.current)
     if (!collection) {
-      logger.warn(
-        `SVG changed outside known collections ("${relativePath}"). Restart the dev server to pick up new collections.`,
-      )
+      // Nuxt's builder:watch fires for every changed file under srcDir, not just
+      // ones inside our inputDir — an unrelated SVG elsewhere in the project (a
+      // hero image, a component's own asset) must not trigger this warning.
+      if (absPath === resolvedInputDir || absPath.startsWith(inputDirPrefix)) {
+        logger.warn(
+          `SVG changed outside known collections ("${relativePath}"). Restart the dev server to pick up new collections.`,
+        )
+      }
       return
     }
 
     const handler = handlers.get(collection.name)
-    if (handler) await handler(event, absPath)
+    if (handler) await handler(event, absPath, collection)
   })
 
   return () => {

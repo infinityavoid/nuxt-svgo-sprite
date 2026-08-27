@@ -2,6 +2,7 @@ import { promises as fsp } from 'node:fs'
 import { addCustomTab, extendServerRpc, onDevToolsInitialized } from '@nuxt/devtools-kit'
 import type { BirpcGroup } from 'birpc'
 import type { Nuxt } from '@nuxt/schema'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SpriteCollection } from '../types/types'
 import type { ClientFunctions, CollectionDTO, ServerFunctions } from './types'
 
@@ -136,6 +137,21 @@ function clientHtml(): string {
       });
     }
 
+    function esc(s) {
+      // componentPrefix (and therefore componentName) comes from the user's own
+      // nuxt.config, not external input, but escaping it before it lands in HTML
+      // attribute values (title="...", alt="...") costs nothing and closes the
+      // self-inflicted injection path. Quotes must be escaped explicitly — a
+      // textContent/innerHTML round-trip does NOT escape " or ', which would break
+      // out of a double-quoted attribute.
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     function render(collections) {
       var app = document.getElementById('app');
       if (!collections || collections.length === 0) {
@@ -145,15 +161,15 @@ function clientHtml(): string {
       app.innerHTML = collections.map(function(col) {
         var icons = col.icons.map(function(icon) {
           var src = '/__nuxt-svgo-sprite/svg/' + col.name + '/' + icon.id;
-          return '<div class="icon-card" title="' + icon.componentName + '">'
-            + '<img class="icon-preview" src="' + src + '" alt="' + icon.id + '" onerror="this.style.opacity=0.2">'
-            + '<span class="icon-id">' + icon.id + '</span>'
+          return '<div class="icon-card" title="' + esc(icon.componentName) + '">'
+            + '<img class="icon-preview" src="' + src + '" alt="' + esc(icon.id) + '" onerror="this.style.opacity=0.2">'
+            + '<span class="icon-id">' + esc(icon.id) + '</span>'
             + '</div>';
         }).join('');
         var badges = '<span class="badge">' + col.iconCount + ' icon' + (col.iconCount !== 1 ? 's' : '') + '</span>';
         if (col.injected) badges += ' <span class="injected-badge">auto-injected</span>';
         return '<div class="collection">'
-          + '<div class="collection-header"><span class="collection-name">' + col.name + '</span>' + badges + '</div>'
+          + '<div class="collection-header"><span class="collection-name">' + esc(col.name) + '</span>' + badges + '</div>'
           + '<div class="icons-grid">' + icons + '</div>'
           + '</div>';
       }).join('');
@@ -171,6 +187,53 @@ function clientHtml(): string {
   </script>
 </body>
 </html>`
+}
+
+/**
+ * Handles one request to the /__nuxt-svgo-sprite middleware: the client HTML shell
+ * at "/" and raw SVG previews at "/svg/{collection}/{iconId}". Exported (separately
+ * from its registration on the Vite dev server) for unit testing.
+ */
+export function createDevtoolsMiddleware(
+  collectionsRef: { current: SpriteCollection[] },
+): (req: IncomingMessage, res: ServerResponse) => void {
+  return (req, res) => {
+    const url = (req.url ?? '/').split('?')[0] ?? '/'
+
+    if (url === '/' || url === '') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8')
+      res.end(clientHtml())
+      return
+    }
+
+    const svgMatch = url.match(/^\/svg\/([^/]+)\/([^/]+)$/)
+    if (svgMatch) {
+      // Collection names and icon ids are always [A-Za-z0-9-] by construction (see
+      // resolveIconPreviewPath's docstring), so no URL encoding round-trip is needed
+      // here — decoding would only add a URIError throw path for malformed input.
+      const colName = svgMatch[1]!
+      const iconId = svgMatch[2]!
+      const absPath = resolveIconPreviewPath(colName, iconId, collectionsRef.current)
+      if (absPath) {
+        fsp.readFile(absPath, 'utf-8')
+          .then((content) => {
+            res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8')
+            // Previews are re-fetched by URL after every rebuild broadcast; caching
+            // them would keep showing a stale icon after an edit until a hard refresh.
+            res.setHeader('Cache-Control', 'no-cache')
+            res.end(content)
+          })
+          .catch(() => {
+            res.statusCode = 404
+            res.end()
+          })
+        return
+      }
+    }
+
+    res.statusCode = 404
+    res.end()
+  }
 }
 
 /**
@@ -203,37 +266,7 @@ export function setupDevtools(
   })
 
   nuxt.hook('vite:serverCreated', (viteServer) => {
-    viteServer.middlewares.use('/__nuxt-svgo-sprite', (req, res, _next) => {
-      const url = (req.url ?? '/').split('?')[0] ?? '/'
-
-      if (url === '/' || url === '') {
-        res.setHeader('Content-Type', 'text/html; charset=utf-8')
-        res.end(clientHtml())
-        return
-      }
-
-      const svgMatch = url.match(/^\/svg\/([^/]+)\/([^/]+)$/)
-      if (svgMatch) {
-        const colName = svgMatch[1]!
-        const iconId = svgMatch[2]!
-        const absPath = resolveIconPreviewPath(colName, iconId, collectionsRef.current)
-        if (absPath) {
-          fsp.readFile(absPath, 'utf-8')
-            .then((content) => {
-              res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8')
-              res.end(content)
-            })
-            .catch(() => {
-              res.statusCode = 404
-              res.end()
-            })
-          return
-        }
-      }
-
-      res.statusCode = 404
-      res.end()
-    })
+    viteServer.middlewares.use('/__nuxt-svgo-sprite', createDevtoolsMiddleware(collectionsRef))
   })
 
   return async () => {

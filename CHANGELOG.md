@@ -1,6 +1,38 @@
 # Changelog
 
 
+## v3.0.0...3.1.0
+
+[compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v3.0.0...3.1.0)
+
+### 🚀 Enhancements
+
+- Warn in dev when a SvgUse target isn't in the DOM ([3e94bcb](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/3e94bcb))
+
+### 🩹 Fixes
+
+- Correctness and reliability fixes across the sprite pipeline ([00df8f4](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/00df8f4))
+- DevTools hardening and remaining pipeline polish ([2f3ffe9](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/2f3ffe9))
+- Correctness and performance fixes from a second review pass ([4686149](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/4686149))
+- Bugs found by testing the module as a real consumer ([ee74b7e](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/ee74b7e))
+- Correct and simplify fixes from the previous two rounds ([eb93cda](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/eb93cda))
+- Warn on a silent folder merge the final release gate caught ([6ffbe9a](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/6ffbe9a))
+
+### 📖 Documentation
+
+- Close doc gaps found by testing the module as a real consumer ([8c416a6](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/8c416a6))
+- Fix migration example that no longer demonstrated anything ([5072e3e](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/5072e3e))
+
+### 🏡 Chore
+
+- Merge 3.0.0 into main ([928a29b](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/928a29b))
+- Merge dependency-refresh into main ([2227bfb](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/2227bfb))
+- Add MIT LICENSE file ([1771742](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/1771742))
+
+### ❤️ Contributors
+
+- Anton Ustinov <Anton.ustinov02@mail.ru>
+
 ## v2.2.0...3.0.0
 
 [compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v2.2.0...3.0.0)

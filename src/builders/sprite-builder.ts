@@ -15,12 +15,12 @@ type AstRoot = { type: 'root', children: AstNode[] }
 type AstNode = AstElement | { type: string, children?: AstNode[] }
 type AstParent = AstElement | AstRoot
 
-// Attribute allowlist for <symbol> elements (ported from svg-sprite/lib/svg-sprite/mode/symbol.js)
+// Attribute allowlist for <symbol> elements (ported from svg-sprite/lib/svg-sprite/mode/symbol.js,
+// minus event-handler attributes — script/event stripping is handled unconditionally by the
+// removeScripts plugin below, so listing onclick/onload etc. here would be redundant).
 const SYMBOL_ATTRIBUTES = new Set([
   'id',
   'xml:base', 'xml:lang', 'xml:space',
-  'onfocusin', 'onfocusout', 'onactivate', 'onclick',
-  'onmousedown', 'onmouseup', 'onmouseover', 'onmousemove', 'onmouseout', 'onload',
   'alignment-baseline', 'baseline-shift', 'clip', 'clip-path', 'clip-rule',
   'color', 'color-interpolation', 'color-interpolation-filters', 'color-profile', 'color-rendering',
   'cursor', 'direction', 'display', 'dominant-baseline', 'enable-background',
@@ -40,8 +40,11 @@ const SYMBOL_ATTRIBUTES = new Set([
 
 const SPRITE_STYLE = 'position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0;'
 
-// Regex to detect files that are already sprites (contain <symbol>)
-const HAS_SYMBOL_RE = /<symbol[\s\S]*?>/i
+// Regex to detect files that are already sprites (contain <symbol>). Matched against
+// the source with comments stripped first, and requires a tag boundary after "symbol"
+// so a comment like "<!-- <symbol> -->" or an element named <symbolic> don't false-positive.
+const HAS_SYMBOL_RE = /<symbol[\s/>]/i
+const COMMENT_RE = /<!--[\s\S]*?-->/g
 
 export interface SpriteLogger {
   error(msg: string): void
@@ -53,6 +56,11 @@ export interface SpriteLogger {
 
 export const defaultSvgoConfig: SvgoConfig = {
   plugins: [
+    // No removeViewBox override: SVGO 4's preset-default doesn't include that plugin,
+    // and overriding a plugin the preset doesn't run prints a "not part of
+    // preset-default" warning per icon per build. The "viewBox preservation" test in
+    // sprite-builder.test.ts is the tripwire — if a future SVGO reintroduces
+    // removeViewBox into the preset, that test starts failing and this needs revisiting.
     'preset-default',
     { name: 'inlineStyles', params: { onlyMatchedOnce: false } },
     { name: 'removeAttrs', params: { attrs: ['svg:id'] } },
@@ -198,19 +206,55 @@ function iconIdPrefix(spriteName: string, iconId: string): string {
   return `${spriteName}__${safe}__`
 }
 
+// User svgoConfig.plugins, when provided, REPLACES the built-in default list rather
+// than merging with it — Nuxt/defu's array-concat merge would otherwise let the
+// defaults run a second time after the user's plugins and silently undo their
+// overrides. `svgoConfig` is intentionally NOT registered in
+// defineNuxtModule's `defaults`, so `options.svgoConfig` is undefined unless the user
+// set it. Non-`plugins` keys of the user's config (multipass, floatPrecision, js2svg,
+// ...) are passed through as-is; only `plugins` gets the replace treatment.
 function buildIconConfig(
-  baseCfg: SvgoConfig,
+  userSvgoConfig: SvgoConfig | undefined,
   spriteName: string,
   icon: IconMeta,
   optimizeFiles: boolean,
 ): SvgoConfig {
   const skipOptimization = !optimizeFiles || icon.raw === true
-  const basePlugins = skipOptimization ? [] : (baseCfg.plugins ?? [])
+  const optimizationPlugins = skipOptimization
+    ? []
+    : (userSvgoConfig?.plugins ?? defaultSvgoConfig.plugins ?? [])
   return {
+    ...userSvgoConfig,
     plugins: [
-      ...basePlugins,
+      ...optimizationPlugins,
+      // Structural plugins below always run, independent of optimizeFiles/raw and of
+      // the user's svgoConfig — they are not "optimization", they are invariants the
+      // sprite pipeline itself depends on to produce a valid, safe, non-colliding
+      // <symbol> regardless of which path produced it.
+      { name: 'removeXMLProcInst' },
+      { name: 'removeDoctype' },
+      // Icon SVGs are inlined into every SSR page; strip embedded <script>/event
+      // handlers unconditionally — this must NOT be skippable via optimizeFiles:
+      // false, .raw.svg, or a user-supplied svgoConfig (which replaces the
+      // optimization list above, not this structural block).
+      { name: 'removeScripts' },
       makeInlineDefsPlugin(),
-      { name: 'prefixIds', params: { prefix: iconIdPrefix(spriteName, icon.id), delim: '' } },
+      {
+        name: 'prefixIds',
+        params: {
+          prefix: iconIdPrefix(spriteName, icon.id),
+          delim: '',
+          prefixIds: true,
+          // Only prefix class names when a <style> block can survive into the merged
+          // sprite (i.e. the raw/unoptimized path) — that's the only case where two
+          // icons' identically-named classes could collide in the shared document.
+          // On the optimized path, inlineStyles already turns classes into inline
+          // style="" attributes and removes the <style> block, so there is nothing
+          // left for a class-name collision to apply to, and prefixing would only
+          // rewrite classes a consumer's own external CSS might target.
+          prefixClassNames: skipOptimization,
+        },
+      },
       makeConvertToSymbolPlugin(icon.id),
     ] as SvgoConfig['plugins'],
   }
@@ -218,11 +262,14 @@ function buildIconConfig(
 
 // ─── View box fallback ────────────────────────────────────────────────────────
 
-// Synthesizes viewBox from width/height when viewBox is absent (edge case 9).
+// Synthesizes viewBox from width/height when viewBox is absent.
 function ensureViewBox(svg: string): string {
   if (/\bviewBox\s*=/.test(svg)) return svg
-  const w = svg.match(/<svg[^>]*\swidth\s*=\s*["']([0-9.]+)["']/)?.[1]
-  const h = svg.match(/<svg[^>]*\sheight\s*=\s*["']([0-9.]+)["']/)?.[1]
+  // Only the unitless/px cases are handled — other CSS units (em, pt, %, ...) on a
+  // root <svg> width/height are rare for icon assets and are left to the "no viewBox
+  // or dimensions" warning path below.
+  const w = svg.match(/<svg[^>]*\swidth\s*=\s*["']([0-9.]+)(?:px)?["']/)?.[1]
+  const h = svg.match(/<svg[^>]*\sheight\s*=\s*["']([0-9.]+)(?:px)?["']/)?.[1]
   if (w && h) {
     return svg.replace(/(<svg\b)/, `$1 viewBox="0 0 ${w} ${h}"`)
   }
@@ -237,27 +284,43 @@ function buildSpriteWrapper(symbols: string[]): string {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * Called once per icon after buildSprite decides whether it made it into the
+ * sprite. Lets callers (module.ts, rebuild.ts) know the actual emitted icon set,
+ * which can be a strict subset of the input `icons` — an unreadable, empty,
+ * malformed, or non-<svg>-root file is discovered during folder scanning but only
+ * rejected here, during content processing. Consumers of collection.icons for
+ * generated types/components must use this to avoid advertising an icon (a type
+ * union member, a `Use*` component) that doesn't actually exist in any sprite.
+ */
+export type OnIconResult = (icon: IconMeta, included: boolean) => void
+
 export async function buildAllSprites(
   collections: { name: string, icons: IconMeta[] }[],
-  svgoConfig: SvgoConfig,
+  svgoConfig: SvgoConfig | undefined,
   optimizeFiles: boolean,
   logger: SpriteLogger,
+  onIconResult?: (collectionName: string, icon: IconMeta, included: boolean) => void,
 ): Promise<Map<string, string>> {
   const contents = new Map<string, string>()
   await Promise.all(
-    collections.map(async col =>
-      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name)),
-    ),
+    collections.map(async (col) => {
+      const perIconCallback: OnIconResult | undefined = onIconResult
+        ? (icon, included) => onIconResult(col.name, icon, included)
+        : undefined
+      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name, perIconCallback))
+    }),
   )
   return contents
 }
 
 export async function buildSprite(
   icons: IconMeta[],
-  svgoConfig: SvgoConfig,
+  svgoConfig: SvgoConfig | undefined,
   optimizeFiles: boolean,
   logger: SpriteLogger,
   spriteName = 'default',
+  onIconResult?: OnIconResult,
 ): Promise<string> {
   if (icons.length === 0) {
     logger.warn('No icons found in collection — sprite skipped.')
@@ -266,39 +329,80 @@ export async function buildSprite(
 
   const symbols: string[] = []
 
-  for (const icon of icons) {
-    let raw: string
+  // Read every icon file concurrently (I/O-bound, independent of each other) instead
+  // of one at a time — Promise.all preserves array order regardless of completion
+  // order, so the rest of the per-icon processing below stays sequential/ordered.
+  const reads = await Promise.all(icons.map(async (icon) => {
     try {
-      raw = await fsp.readFile(icon.absolutePath, 'utf-8')
+      return { icon, raw: await fsp.readFile(icon.absolutePath, 'utf-8') }
     }
     catch (err) {
       logger.error(`Failed to read "${icon.absolutePath}": ${String(err)} — skipping.`)
+      return { icon, raw: null as string | null }
+    }
+  }))
+
+  for (const { icon, raw } of reads) {
+    if (raw === null) {
+      onIconResult?.(icon, false)
       continue
     }
 
-    // Edge case 15: reject files that already contain <symbol> elements
-    if (HAS_SYMBOL_RE.test(raw)) {
+    if (raw.trim() === '') {
+      logger.error(`"${icon.absolutePath}" is empty — skipping.`)
+      onIconResult?.(icon, false)
+      continue
+    }
+
+    // Reject files that already contain <symbol> elements — merging one sprite into
+    // another produces a broken nested <symbol> (checked with comments stripped, so
+    // "<!-- <symbol> -->" isn't a false positive).
+    if (HAS_SYMBOL_RE.test(raw.replace(COMMENT_RE, ''))) {
       logger.error(`"${icon.absolutePath}" contains <symbol> elements and cannot be used as an icon — skipping.`)
+      onIconResult?.(icon, false)
       continue
     }
 
-    // Edge case 9: synthesize viewBox from width/height if missing
+    // Synthesize viewBox from width/height if missing; note whether it was already
+    // present so the "no viewBox or dimensions" warning below can be deferred until
+    // we know the icon actually made it into the sprite (optimize() can still reject
+    // it afterward, and warning "included as-is" about something that got excluded
+    // would be misleading).
     const hasViewBox = /\bviewBox\s*=/.test(raw)
     const input = ensureViewBox(raw)
-    if (!hasViewBox && input === raw) {
-      // ensureViewBox returned unchanged — no viewBox, no parseable dimensions
-      logger.warn(`"${icon.absolutePath}" has no viewBox or dimensions — included as-is, may not scale correctly.`)
-    }
+    const missingDimensions = !hasViewBox && input === raw
 
     const config = buildIconConfig(svgoConfig, spriteName, icon, optimizeFiles)
     try {
       const result = optimize(input, config)
+      // convertToSymbol only renames a root <svg> — if the source's root element
+      // wasn't <svg> (or optimize somehow produced nothing), the result never became
+      // a <symbol>. Emitting it verbatim would silently corrupt the sprite.
+      if (!/^\s*<symbol[\s/>]/.test(result.data)) {
+        logger.error(`"${icon.absolutePath}" does not have an <svg> root element — skipping.`)
+        onIconResult?.(icon, false)
+        continue
+      }
+      if (missingDimensions) {
+        logger.warn(`"${icon.absolutePath}" has no viewBox or dimensions — included as-is, may not scale correctly.`)
+      }
       symbols.push(result.data)
+      onIconResult?.(icon, true)
     }
     catch (err) {
-      // Edge case 8: malformed SVG — log and skip, do not fail the whole sprite
+      // Malformed SVG — log and skip, do not fail the whole sprite.
       logger.error(`Failed to process "${icon.absolutePath}": ${String(err)} — skipping.`)
+      onIconResult?.(icon, false)
     }
+  }
+
+  if (symbols.length === 0) {
+    // Every icon in a non-empty collection failed individually (each already logged
+    // its own error above). Return '' here too — same empty-sprite shape as the
+    // icons.length === 0 case above, which the generated Sprite.vue template already
+    // handles via `spriteContents.get(name) ?? ''`.
+    logger.warn(`All ${icons.length} icon(s) in this collection failed to process — sprite is empty.`)
+    return ''
   }
 
   return buildSpriteWrapper(symbols)

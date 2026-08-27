@@ -9,6 +9,6 @@ export default defineNuxtConfig({
     componentPrefix: 'Icon',
     optimizeFiles: true,
     // autoInjectSprite: true  ← uncomment to skip manual <DefaultSprite /> / <AdminSprite />
-    // svgoConfig: { plugins: [{ name: 'preset-default', params: { overrides: { removeViewBox: false } } }] }
+    // svgoConfig: { plugins: [{ name: 'preset-default', params: { overrides: { removeComments: false } } }] }
   },
 })

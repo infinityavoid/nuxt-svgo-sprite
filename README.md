@@ -17,6 +17,7 @@ Nuxt 3 module that auto-discovers SVG collections from your folder structure, ge
 - **HMR support** — dev server rebuilds sprites on file add/change/remove
 - **Optional per-icon wrapper components** — `<UseHome />`, `<IconAdminUser />`, etc.
 - **SSR-friendly** — sprites are inlined into the HTML, no layout shift
+- **Nuxt DevTools tab** — browse every discovered collection and icon, with live previews
 - Nuxt 3 / Nuxt 4 compatible
 
 ## Install
@@ -34,7 +35,7 @@ export default defineNuxtConfig({
 })
 ```
 
-Place your SVG icons under `assets/icons/`:
+Place your SVG icons under `assets/icons/` (Nuxt 3) or `app/assets/icons/` (Nuxt 4 — its default `srcDir` moved to `app/`):
 
 ```
 assets/icons/
@@ -83,6 +84,15 @@ Root-level files and the optional `default/` subfolder both belong to the **defa
 Each discovered collection gets:
 - **Sprite component** — `<DefaultSprite />`, `<AdminSprite />`, `<PaymentsSprite />`
 - **TypeScript type** — `DefaultIconName`, `AdminIconName`, `PaymentsIconName`
+
+**Every folder is its own collection — nesting doesn't merge upward.** `admin/nested/deep.svg` becomes its *own* `AdminNestedSprite` / `AdminNestedIconName`, not part of `admin`. There's no namespacing within a collection (see [Migrating from v2](#migrating-from-v2)) — if you use `autoInjectSprite` with an explicit collection list, remember a two-levels-deep folder needs its own entry in that list too.
+
+A few more behaviors worth knowing before organizing a large icon set:
+- **Unknown collection names** in `autoInjectSprite: [...]` are warned about and skipped, listing the collections that were actually found.
+- **Duplicate symbol ids** (e.g. a root `admin-user.svg` alongside `admin/user.svg`) are warned about; one of them is dropped — the warning names exactly which file.
+- **Filenames with spaces, capitals, or other non-standard characters** are normalized (`My Icon.svg` → id `my-icon`) with a warning naming the original file — useful to know before naming hundreds of files.
+- **A malformed or empty SVG, or one whose root element isn't `<svg>`,** is logged as an error and excluded from that build — it does not fail the whole sprite, and it does not appear in the generated types or components.
+- `inputDir` also accepts a plain relative path (e.g. `'assets/icons'`, resolved against `srcDir`) — `~` aliases are supported, not required.
 
 ## Components
 
@@ -161,6 +171,10 @@ Sprites are injected before `#__nuxt` in the rendered HTML, outside Vue's hydrat
 
 When `autoInjectSprite: false` (the default), a dev-mode notice lists the sprite component names you need to add.
 
+## Nuxt DevTools
+
+In dev mode, open Nuxt DevTools and look for the **SVG Sprite** tab. It lists every discovered collection with its icon count, an `auto-injected` badge where relevant, and a live preview image for each icon — the fastest way to check exactly what your folder structure produced without reading generated files by hand. It updates automatically as you add/edit/remove icons.
+
 ## SVGO opt-out per icon
 
 Rename any icon file to `*.raw.svg` to include it in the sprite **without SVGO optimization**. This is useful for icons that rely on features SVGO's default preset removes (XML comments, certain attributes, animation data):
@@ -198,7 +212,7 @@ All standard SVG presentation attributes (`fill`, `stroke`, `stroke-width`, `col
 
 ## TypeScript types
 
-The module generates `#build/nuxt-svgo-sprite/icon-names.d.ts` and registers it in your Nuxt `tsconfig` automatically (via `prepare:types`). No imports needed:
+The module generates `#build/nuxt-svgo-sprite/icon-names.d.ts` and registers it in your Nuxt `tsconfig` automatically (via `prepare:types`):
 
 ```ts
 // Generated from your actual .svg files:
@@ -207,7 +221,13 @@ export type AdminIconName   = 'admin-user' | 'admin-shield'
 export type AllIconName     = DefaultIconName | AdminIconName
 ```
 
-`SvgUse`'s `name` prop is typed as `AllIconName`, so your IDE flags unknown icon names at development time.
+`SvgUse`'s `name` prop is already typed as `AllIconName` — no import needed to get typo detection on `<SvgUse name="...">` itself. If you want one of the generated types yourself (e.g. to type a `ref`), import it explicitly, the same way the module's own `SvgUse` component does:
+
+```ts
+import type { AllIconName } from '#build/nuxt-svgo-sprite/icon-names'
+
+const currentIcon = ref<AllIconName>('home')
+```
 
 ## Configuration
 
@@ -231,7 +251,7 @@ export default defineNuxtConfig({
 | `createUseComponents` | `boolean` | `false` | Generate a wrapper component per icon. |
 | `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
 | `autoInjectSprite` | `boolean \| string[]` | `false` | Inject sprite(s) into every SSR page automatically. |
-| `svgoConfig` | `SvgoConfig` | internal defaults | Deep-merged over the built-in SVGO configuration. See [SVGO docs](https://svgo.dev) for available plugins. |
+| `svgoConfig` | `SvgoConfig` | internal defaults | When set, `plugins` REPLACES the built-in default plugin list (not merged) — pass the full list you want. Other `SvgoConfig` keys (`multipass`, `floatPrecision`, `js2svg`, ...) are passed straight through. See [SVGO docs](https://svgo.dev) for available plugins. |
 
 ## Migrating from v2
 
@@ -253,14 +273,16 @@ There is no `collections: Record<string, string>` config key. Collections are di
 ```ts
 // v2
 spriteOptions: {
-  shape: { transform: [{ svgo: { plugins: [{ name: 'removeViewBox', active: false }] } }] }
+  shape: { transform: [{ svgo: { plugins: [{ name: 'preset-default', params: { overrides: { removeComments: false } } }] } }] }
 }
 
 // v3
 svgoConfig: {
-  plugins: [{ name: 'preset-default', params: { overrides: { removeViewBox: false } } }]
+  plugins: [{ name: 'preset-default', params: { overrides: { removeComments: false } } }]
 }
 ```
+
+> `viewBox` is preserved by default without any override needed — SVGO 4's `preset-default` doesn't include `removeViewBox` at all, so passing `overrides: { removeViewBox: false }` only produces a "not part of preset-default" warning; it doesn't do anything.
 
 svg-sprite-specific keys (`mode`, `svg.rootAttributes`, `shape.*`) have no v3 equivalent — these are handled internally.
 
