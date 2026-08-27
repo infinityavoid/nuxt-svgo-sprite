@@ -19,7 +19,7 @@ export function sanitizeSegment(segment: string): string {
  * with hyphens, collapses consecutive hyphens, trims leading/trailing hyphens.
  */
 export function sanitizeFilename(filename: string): string {
-  const withoutExt = filename.endsWith('.svg') ? filename.slice(0, -4) : filename
+  const withoutExt = /\.svg$/i.test(filename) ? filename.slice(0, -4) : filename
   return withoutExt
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
@@ -46,6 +46,15 @@ function toCamelCase(str: string): string {
 }
 
 /**
+ * Prepends an underscore when `str` doesn't start with a valid identifier-start
+ * character (letter, `_`, or `$`) — e.g. a folder named "2fa" would otherwise derive
+ * a type name like "2faIconName", which is not valid TypeScript/JS syntax.
+ */
+function ensureValidIdentifierStart(str: string): string {
+  return /^[a-z_$]/i.test(str) ? str : `_${str}`
+}
+
+/**
  * Derives the camelCase collection name from folder path segments.
  * Empty segments → "default".
  */
@@ -59,7 +68,7 @@ export function deriveCollectionName(segments: string[]): string {
  * Uses the uniform formula for all collections, including default → DefaultIconName.
  */
 export function deriveTypeName(collectionName: string): string {
-  return toPascalCase(collectionName) + 'IconName'
+  return ensureValidIdentifierStart(toPascalCase(collectionName)) + 'IconName'
 }
 
 /**
@@ -68,7 +77,7 @@ export function deriveTypeName(collectionName: string): string {
  * Examples: default → DefaultSprite, admin → AdminSprite.
  */
 export function deriveSpriteComponentName(collectionName: string): string {
-  return toPascalCase(collectionName) + 'Sprite'
+  return ensureValidIdentifierStart(toPascalCase(collectionName)) + 'Sprite'
 }
 
 /**
@@ -82,11 +91,11 @@ export function buildIconMeta(
   absoluteFilePath: string,
   componentPrefix: string,
 ): IconMeta {
-  const isRaw = filename.endsWith('.raw.svg')
+  const isRaw = /\.raw\.svg$/i.test(filename)
   // Strip .raw before .svg so the icon id is 'home', not 'home-raw'
   const effectiveName = isRaw ? filename.slice(0, -8) + '.svg' : filename
   const base = sanitizeFilename(effectiveName)
   const id = segments.length === 0 ? base : `${segments.join('-')}-${base}`
-  const componentName = componentPrefix + toPascalCase(id)
+  const componentName = ensureValidIdentifierStart(componentPrefix + toPascalCase(id))
   return { id, componentName, absolutePath: absoluteFilePath, raw: isRaw || undefined }
 }

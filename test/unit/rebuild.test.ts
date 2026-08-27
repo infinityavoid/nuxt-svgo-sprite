@@ -176,4 +176,59 @@ describe('createRebuildHandler', () => {
 
     expect(broadcastRefresh).toHaveBeenCalledOnce()
   })
+
+  it('passes the collection name as spriteName to buildSprite, not the "default" fallback', async () => {
+    const col = makeCollection('admin', '/icons/admin')
+    const updatedCol = makeCollection('admin', '/icons/admin', [
+      { id: 'admin-star', componentName: 'UseAdminStar', absolutePath: '/icons/admin/star.svg' },
+    ]);
+    (rebuildSingleCollection as ReturnType<typeof vi.fn>).mockResolvedValue(updatedCol)
+
+    const ctx = makeCtx()
+    const handler = createRebuildHandler(ctx)
+    await handler(col, 'change', '/icons/admin/star.svg')
+
+    expect(buildSprite).toHaveBeenCalledWith(
+      updatedCol.icons,
+      ctx.options.svgoConfig,
+      ctx.options.optimizeFiles,
+      mockLogger,
+      'admin',
+    )
+  })
+
+  it('drops a rescanned icon whose id collides with another live collection, and warns', async () => {
+    const col = makeCollection('admin', '/icons/admin')
+    const updatedCol = makeCollection('admin', '/icons/admin', [
+      { id: 'home', componentName: 'UseHome', absolutePath: '/icons/admin/home.svg' },
+    ]);
+    (rebuildSingleCollection as ReturnType<typeof vi.fn>).mockResolvedValue(updatedCol)
+
+    const defaultCol = makeCollection('default', '/icons', [
+      { id: 'home', componentName: 'UseHome', absolutePath: '/icons/home.svg' },
+    ])
+    const ctx = makeCtx({ collectionsRef: { current: [defaultCol, makeCollection('admin', '/icons/admin')] } })
+    const handler = createRebuildHandler(ctx)
+    await handler(col, 'change', '/icons/admin/home.svg')
+
+    const admin = ctx.collectionsRef.current.find(c => c.name === 'admin')!
+    expect(admin.icons).toHaveLength(0)
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Symbol id collision'))
+  })
+
+  it('logs an error and does not throw when rebuildSingleCollection rejects', async () => {
+    const col = makeCollection('default', '/icons');
+    (rebuildSingleCollection as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('EBUSY: resource busy'))
+
+    const ctx = makeCtx()
+    const handler = createRebuildHandler(ctx)
+    await expect(handler(col, 'change', '/icons/home.svg')).resolves.toBeUndefined()
+
+    expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('EBUSY'))
+    // State is left untouched on failure.
+    expect(ctx.collectionsRef.current).toEqual([
+      makeCollection('default', '/icons'),
+      makeCollection('admin', '/icons/admin'),
+    ])
+  })
 })

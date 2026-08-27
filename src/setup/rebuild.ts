@@ -8,7 +8,7 @@ import type { TemplateHandles } from '../templates/templates'
 
 interface RebuildOptions {
   componentPrefix: string
-  svgoConfig: SvgoConfig
+  svgoConfig: SvgoConfig | undefined
   optimizeFiles: boolean
   createUseComponents: boolean
 }
@@ -35,43 +35,74 @@ export function createRebuildHandler(ctx: RebuildContext) {
   return async (collection: SpriteCollection, event: string, absPath: string): Promise<void> => {
     ctx.logger.info(`${event}: "${absPath}" – rebuilding collection "${collection.name}"…`)
 
-    const updatedCol = await rebuildSingleCollection(
-      collection,
-      ctx.options.componentPrefix,
-      ctx.logger,
-    )
-    ctx.collectionsRef.current = ctx.collectionsRef.current.map(c =>
-      c.name === collection.name ? updatedCol : c,
-    )
-    ctx.spriteContents.set(
-      collection.name,
-      await buildSprite(
-        updatedCol.icons,
-        ctx.options.svgoConfig,
-        ctx.options.optimizeFiles,
+    try {
+      const rescanned = await rebuildSingleCollection(
+        collection,
+        ctx.options.componentPrefix,
         ctx.logger,
-      ),
-    )
-    ctx.iconTypesRef.current = buildIconTypesContent(ctx.collectionsRef.current)
+      )
 
-    const spriteTplName = ctx.handles.spriteTemplateNames.get(collection.name)
-    const updateInject = ctx.injectTemplateName && ctx.injectedCollectionNames.has(collection.name)
+      // Re-check symbol-id uniqueness against the OTHER live collections — a single-
+      // collection rescan can't see this on its own, but a rename that collides with
+      // an icon in another collection is exactly as unsafe here as at cold build
+      // (see buildCollectionsFromDir's global pass 2).
+      const otherIds = new Set(
+        ctx.collectionsRef.current
+          .filter(c => c.name !== collection.name)
+          .flatMap(c => c.icons.map(i => i.id)),
+      )
+      const icons = rescanned.icons.filter((icon) => {
+        if (otherIds.has(icon.id)) {
+          ctx.logger.warn(
+            `Symbol id collision: "${icon.id}" in collection "${rescanned.name}" is already used by `
+            + `another collection — skipping "${icon.absolutePath}".`,
+          )
+          return false
+        }
+        return true
+      })
+      const updatedCol = { ...rescanned, icons }
 
-    await updateTemplates({
-      filter: t =>
-        t.filename === spriteTplName
-        || t.filename === ctx.handles.typeTemplateName
-        || (updateInject === true && t.filename === ctx.injectTemplateName),
-    })
+      ctx.collectionsRef.current = ctx.collectionsRef.current.map(c =>
+        c.name === collection.name ? updatedCol : c,
+      )
+      ctx.spriteContents.set(
+        collection.name,
+        await buildSprite(
+          updatedCol.icons,
+          ctx.options.svgoConfig,
+          ctx.options.optimizeFiles,
+          ctx.logger,
+          updatedCol.name,
+        ),
+      )
+      ctx.iconTypesRef.current = buildIconTypesContent(ctx.collectionsRef.current)
 
-    if (event === 'add' && ctx.options.createUseComponents && updatedCol) {
-      const newIcon = updatedCol.icons.find(i => i.absolutePath === absPath)
-      if (newIcon) {
-        registerUseComponent(newIcon)
-        ctx.logger.info(`Registered new component <${newIcon.componentName} />.`)
+      const spriteTplName = ctx.handles.spriteTemplateNames.get(collection.name)
+      const updateInject = ctx.injectTemplateName && ctx.injectedCollectionNames.has(collection.name)
+
+      await updateTemplates({
+        filter: t =>
+          t.filename === spriteTplName
+          || t.filename === ctx.handles.typeTemplateName
+          || (updateInject === true && t.filename === ctx.injectTemplateName),
+      })
+
+      if (event === 'add' && ctx.options.createUseComponents) {
+        const newIcon = updatedCol.icons.find(i => i.absolutePath === absPath)
+        if (newIcon) {
+          registerUseComponent(newIcon)
+          ctx.logger.info(`Registered new component <${newIcon.componentName} />.`)
+        }
       }
-    }
 
-    await ctx.broadcastRefresh?.()
+      await ctx.broadcastRefresh?.()
+    }
+    catch (err) {
+      // A transient FS error (e.g. EBUSY/EPERM while an editor rewrites a file) must
+      // not crash the watcher — log and leave the previous sprite/collection state in
+      // place; the next file-change event gets another chance.
+      ctx.logger.error(`Failed to rebuild collection "${collection.name}" after ${event} "${absPath}": ${String(err)}`)
+    }
   }
 }

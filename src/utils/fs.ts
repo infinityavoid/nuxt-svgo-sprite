@@ -14,7 +14,10 @@ export interface WalkerLogger {
   warn(msg: string): void
 }
 
-const IGNORE_DIRS = ['node_modules', 'dist', 'build', 'coverage', 'test', 'tests']
+const IGNORE_DIR_NAMES = ['node_modules', 'dist', 'build', 'coverage', 'test', 'tests']
+// Match these dir names at ANY depth, not just directly under inputDir —
+// a nested folder named e.g. "test/" was previously excluded only at the top level.
+const IGNORE_DIRS = IGNORE_DIR_NAMES.flatMap(d => [`${d}/**`, `**/${d}/**`])
 
 /**
  * Walks inputDir and groups .svg files by their collection (parent folder segments).
@@ -35,6 +38,7 @@ export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Pro
     onlyFiles: true,
     absolute: true,
     followSymbolicLinks: false,
+    caseSensitiveMatch: false,
     ignore: IGNORE_DIRS,
   })
 

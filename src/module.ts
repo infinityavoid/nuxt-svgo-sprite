@@ -6,7 +6,7 @@ import {
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { version } from '../package.json'
-import { defaultSvgoConfig, buildAllSprites } from './builders/sprite-builder'
+import { buildAllSprites } from './builders/sprite-builder'
 import { buildCollectionsFromDir } from './builders/collection-builder'
 import { setupWatcher } from './watcher/watcher'
 import { buildIconTypesContent, setupTemplates } from './templates/templates'
@@ -30,7 +30,11 @@ export default defineNuxtModule<ModuleOptions>({
     createUseComponents: false,
     componentPrefix: 'Use',
     optimizeFiles: true,
-    svgoConfig: defaultSvgoConfig,
+    // svgoConfig deliberately has NO default here. defineNuxtModule's defu-based merge
+    // concatenates arrays rather than replacing them, so a default svgoConfig.plugins
+    // array would run alongside (not instead of) the user's — silently undoing their
+    // overrides. sprite-builder.ts falls back to its own defaultSvgoConfig when the
+    // user provides none. See the Phase 14 audit / ADR pending in 07-Decisions.md.
     autoInjectSprite: false,
   },
 
@@ -62,7 +66,7 @@ export default defineNuxtModule<ModuleOptions>({
 
     const spriteContents = await buildAllSprites(
       collections,
-      options.svgoConfig!,
+      options.svgoConfig,
       options.optimizeFiles!,
       logger,
     )
@@ -87,6 +91,11 @@ export default defineNuxtModule<ModuleOptions>({
       }
     }
     else {
+      if (Array.isArray(options.autoInjectSprite) && options.autoInjectSprite.length === 0) {
+        logger.warn(
+          'autoInjectSprite: [] injects nothing (same as `false`) — if that\'s intentional, use `autoInjectSprite: false` instead.',
+        )
+      }
       const injectCols = resolveInjectCollections(options.autoInjectSprite, collections, logger)
       if (injectCols.length > 0) {
         injectTemplateName = setupAutoInject(injectCols, spriteContents)
@@ -101,12 +110,12 @@ export default defineNuxtModule<ModuleOptions>({
 
     const cleanup = setupWatcher(
       nuxt,
-      collections,
+      collectionsRef,
       logger,
       createRebuildHandler({
         options: {
           componentPrefix: options.componentPrefix!,
-          svgoConfig: options.svgoConfig!,
+          svgoConfig: options.svgoConfig,
           optimizeFiles: options.optimizeFiles!,
           createUseComponents: options.createUseComponents!,
         },

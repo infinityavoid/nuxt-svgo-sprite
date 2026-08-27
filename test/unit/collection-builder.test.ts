@@ -170,4 +170,46 @@ describe('buildCollectionsFromDir', () => {
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('My Icon.svg'))
     expect(cols[0]!.icons[0]!.id).toBe('my-icon')
   })
+
+  it('a filename with no usable characters after normalization is skipped with a warning', async () => {
+    await writeSvg('звезда.svg')
+    await writeSvg('home.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.icons).toHaveLength(1)
+    expect(cols[0]!.icons[0]!.id).toBe('home')
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('звезда.svg'))
+  })
+
+  it('two folders that sanitize to the same collection name: the later one is skipped with a warning', async () => {
+    await writeSvg('admin-icons', 'star.svg')
+    await writeSvg('admin_icons', 'close.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('adminIcons')
+    expect(cols[0]!.icons).toHaveLength(1)
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Collection name collision'))
+  })
+
+  it('a folder literally named "Default" collides with the implicit default collection', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('Default', 'extra.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    // Exactly one 'default' collection survives — no duplicate DefaultIconName export.
+    const defaultCols = cols.filter(c => c.name === 'default')
+    expect(defaultCols).toHaveLength(1)
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Collection name collision'))
+  })
+
+  it('two collections whose icons derive the same symbol id: the later icon is skipped with a warning', async () => {
+    await writeSvg('admin', 'star.svg')
+    await writeSvg('admin-star.svg') // root file, id "admin-star" — collides with admin/star.svg
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    const allIds = cols.flatMap(c => c.icons.map(i => i.id))
+    expect(allIds.filter(id => id === 'admin-star')).toHaveLength(1)
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Symbol id collision'))
+  })
 })

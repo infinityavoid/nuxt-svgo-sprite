@@ -231,7 +231,7 @@ export default defineNuxtConfig({
 | `createUseComponents` | `boolean` | `false` | Generate a wrapper component per icon. |
 | `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
 | `autoInjectSprite` | `boolean \| string[]` | `false` | Inject sprite(s) into every SSR page automatically. |
-| `svgoConfig` | `SvgoConfig` | internal defaults | Deep-merged over the built-in SVGO configuration. See [SVGO docs](https://svgo.dev) for available plugins. |
+| `svgoConfig` | `SvgoConfig` | internal defaults | When set, `plugins` REPLACES the built-in default plugin list (not merged) — pass the full list you want. See [SVGO docs](https://svgo.dev) for available plugins. |
 
 ## Migrating from v2
 

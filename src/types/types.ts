@@ -18,7 +18,7 @@ export interface SpriteCollection {
   segments: string[]
   /** absolute path to this collection's folder */
   inputDir: string
-  /** sprite component name, e.g. "AdminButtonsSprite" (or "Sprite" for default) */
+  /** sprite component name, e.g. "AdminButtonsSprite" (or "DefaultSprite" for default) */
   spriteComponentName: string
   /** TypeScript type name, e.g. "AdminButtonsIconName" (or "DefaultIconName") */
   typeName: string
@@ -62,7 +62,11 @@ export interface ModuleOptions {
   autoInjectSprite?: boolean | string[]
 
   /**
-   * Custom SVGO configuration, deep-merged over built-in defaults by Nuxt.
+   * Custom SVGO configuration. When provided, `plugins` REPLACES the built-in
+   * default plugin list entirely (it is not merged with it) — pass the full list
+   * of plugins you want to run, in order. Structural plugins required for sprite
+   * correctness (internal id prefixing, symbol conversion, etc.) always run
+   * afterwards regardless of this option. When omitted, the built-in defaults run.
    */
   svgoConfig?: SvgoConfig
 }

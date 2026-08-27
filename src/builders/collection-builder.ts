@@ -15,10 +15,85 @@ export interface CollectionLogger {
 }
 
 /**
+ * Resolves the sanitized filename base for `filename` (accounting for `.raw.svg`),
+ * warning when normalization changed it. Returns undefined (and warns) when the base
+ * has no usable characters after normalization — e.g. a filename with no ASCII
+ * alphanumerics (extends the ADR-014 sanitization-warning policy to filenames, not
+ * just folder segments).
+ */
+function resolveFilenameBase(
+  filename: string,
+  collectionLabel: string,
+  logger: CollectionLogger,
+): string | undefined {
+  const isRaw = /\.raw\.svg$/i.test(filename)
+  const effectiveName = isRaw ? filename.slice(0, -8) + '.svg' : filename
+  const base = sanitizeFilename(effectiveName)
+
+  if (!base) {
+    logger.warn(
+      `Skipping "${filename}" in collection "${collectionLabel}": filename has no usable characters after normalization.`,
+    )
+    return undefined
+  }
+
+  const rawBase = effectiveName.slice(0, -4).toLowerCase()
+  if (rawBase !== base) {
+    logger.warn(
+      `Filename "${filename}" contains non-standard characters and was normalized (original base: "${rawBase}").`,
+    )
+  }
+
+  return base
+}
+
+/**
+ * Builds IconMeta for every file in `files`, applying filename-sanitization and
+ * within-collection id-collision guards. Single place both `buildCollectionsFromDir`
+ * and `rebuildSingleCollection` derive icons from files, so the two never drift.
+ */
+function processFiles(
+  files: string[],
+  segments: string[],
+  collectionLabel: string,
+  componentPrefix: string,
+  logger: CollectionLogger,
+): IconMeta[] {
+  const seenIds = new Set<string>()
+  const icons: IconMeta[] = []
+
+  for (const filePath of files) {
+    const filename = path.basename(filePath)
+
+    if (resolveFilenameBase(filename, collectionLabel, logger) === undefined) continue
+
+    const meta = buildIconMeta(filename, segments, filePath, componentPrefix)
+
+    if (seenIds.has(meta.id)) {
+      logger.warn(
+        `Id collision in collection "${collectionLabel}": "${meta.id}" already exists. Skipping "${filename}".`,
+      )
+      continue
+    }
+
+    seenIds.add(meta.id)
+    icons.push(meta)
+  }
+
+  return icons
+}
+
+/**
  * Walks resolvedInputDir and builds one SpriteCollection per discovered folder.
  * Root-level and default/ SVGs → default collection.
  * Each other subfolder (at any depth) → its own named collection.
  * Collections with no icons after collision filtering are omitted.
+ *
+ * After discovery, two global validation passes run across ALL collections:
+ * collection-name uniqueness (two folders sanitizing to the same name, e.g.
+ * "admin-icons" and "admin_icons") and symbol-id uniqueness (e.g. "admin/star.svg"
+ * and root-level "admin-star.svg" both deriving id "admin-star"). Both are
+ * warn-and-skip-the-later-one, matching the within-collection collision policy.
  *
  * No Nuxt dependency — path resolution is the caller's responsibility.
  */
@@ -28,7 +103,7 @@ export async function buildCollectionsFromDir(
   logger: CollectionLogger,
 ): Promise<SpriteCollection[]> {
   const entries = await walkInputDir(resolvedInputDir, logger)
-  const collections: SpriteCollection[] = []
+  const candidates: { collection: SpriteCollection, rawPath: string }[] = []
 
   for (const entry of entries) {
     const { segments, files } = entry
@@ -45,35 +120,7 @@ export async function buildCollectionsFromDir(
     }
 
     const name = deriveCollectionName(sanitizedSegments)
-
-    const seenIds = new Set<string>()
-    const icons: IconMeta[] = []
-
-    for (const filePath of files) {
-      const filename = path.basename(filePath)
-
-      // Warn when the filename needs sanitization beyond just removing the extension.
-      const effectiveName = filename.endsWith('.raw.svg') ? filename.slice(0, -8) + '.svg' : filename
-      const rawBase = effectiveName.slice(0, -4).toLowerCase()
-      if (rawBase !== sanitizeFilename(effectiveName)) {
-        logger.warn(
-          `Filename "${filename}" contains non-standard characters and was normalized (original base: "${rawBase}").`,
-        )
-      }
-
-      const meta = buildIconMeta(filename, sanitizedSegments, filePath, componentPrefix)
-
-      if (seenIds.has(meta.id)) {
-        logger.warn(
-          `Id collision in collection "${name}": "${meta.id}" already exists. Skipping "${filename}".`,
-        )
-        continue
-      }
-
-      seenIds.add(meta.id)
-      icons.push(meta)
-    }
-
+    const icons = processFiles(files, sanitizedSegments, name, componentPrefix, logger)
     if (icons.length === 0) continue
 
     // Default collection (segments []) → inputDir is the tree root.
@@ -82,14 +129,54 @@ export async function buildCollectionsFromDir(
       ? resolvedInputDir
       : path.join(resolvedInputDir, ...segments)
 
-    collections.push({
-      name,
-      segments: sanitizedSegments.slice(),
-      inputDir: collectionDir,
-      spriteComponentName: deriveSpriteComponentName(name),
-      typeName: deriveTypeName(name),
-      icons,
+    candidates.push({
+      collection: {
+        name,
+        segments: sanitizedSegments.slice(),
+        inputDir: collectionDir,
+        spriteComponentName: deriveSpriteComponentName(name),
+        typeName: deriveTypeName(name),
+        icons,
+      },
+      rawPath: segments.length === 0 ? '(root)' : segments.join('/'),
     })
+  }
+
+  // Global pass 1: collection-name uniqueness across the whole tree.
+  const seenNames = new Map<string, string>()
+  const named: { collection: SpriteCollection, rawPath: string }[] = []
+  for (const candidate of candidates) {
+    const existingPath = seenNames.get(candidate.collection.name)
+    if (existingPath !== undefined) {
+      logger.warn(
+        `Collection name collision: folder "${candidate.rawPath}" normalizes to the same collection `
+        + `name ("${candidate.collection.name}") as folder "${existingPath}". Skipping "${candidate.rawPath}" — `
+        + `rename one of the folders.`,
+      )
+      continue
+    }
+    seenNames.set(candidate.collection.name, candidate.rawPath)
+    named.push(candidate)
+  }
+
+  // Global pass 2: symbol-id uniqueness across the whole tree (ADR-015's "unique by
+  // construction" claim doesn't hold in general — e.g. "admin/star.svg" and root-level
+  // "admin-star.svg" both derive id "admin-star").
+  const seenIds = new Set<string>()
+  const collections: SpriteCollection[] = []
+  for (const { collection } of named) {
+    const icons = collection.icons.filter((icon) => {
+      if (seenIds.has(icon.id)) {
+        logger.warn(
+          `Symbol id collision: "${icon.id}" in collection "${collection.name}" was already used by another `
+          + `collection. Skipping "${icon.absolutePath}" — rename the file or its folder.`,
+        )
+        return false
+      }
+      seenIds.add(icon.id)
+      return true
+    })
+    if (icons.length > 0) collections.push({ ...collection, icons })
   }
 
   return collections
@@ -98,6 +185,8 @@ export async function buildCollectionsFromDir(
 /**
  * Re-scans a single collection's folder and returns an updated SpriteCollection.
  * Used by the watcher rebuild path to avoid re-scanning the entire inputDir tree.
+ * Cross-collection id uniqueness (global pass 2 above) is re-checked by the caller
+ * against the other live collections — this function only re-derives the local set.
  */
 export async function rebuildSingleCollection(
   collection: SpriteCollection,
@@ -108,23 +197,7 @@ export async function rebuildSingleCollection(
   const direct = entries.find(e => e.segments.length === 0)
   const files = direct?.files ?? []
 
-  const seenIds = new Set<string>()
-  const icons: IconMeta[] = []
-
-  for (const filePath of files) {
-    const filename = path.basename(filePath)
-    const meta = buildIconMeta(filename, collection.segments, filePath, componentPrefix)
-
-    if (seenIds.has(meta.id)) {
-      logger.warn(
-        `Id collision in collection "${collection.name}": "${meta.id}" already exists. Skipping "${filename}".`,
-      )
-      continue
-    }
-
-    seenIds.add(meta.id)
-    icons.push(meta)
-  }
+  const icons = processFiles(files, collection.segments, collection.name, componentPrefix, logger)
 
   return { ...collection, icons }
 }

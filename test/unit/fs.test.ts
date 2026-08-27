@@ -150,4 +150,27 @@ describe('walkInputDir', () => {
     const allFiles = entries.flatMap(e => e.files)
     expect(allFiles.every(f => !f.replace(/\\/g, '/').includes('/dist/'))).toBe(true)
   })
+
+  it('finds SVGs with an uppercase .SVG extension', async () => {
+    const file = await writeSvg('HOME.SVG')
+    const entries = await walkInputDir(tmpDir)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.files).toContain(file)
+  })
+
+  it('ignores a nested folder named "test", not just a top-level one', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('admin', 'test', 'icon.svg')
+    const entries = await walkInputDir(tmpDir)
+    const allFiles = entries.flatMap(e => e.files)
+    expect(allFiles.every(f => !f.replace(/\\/g, '/').includes('/test/'))).toBe(true)
+  })
+
+  it('ignores a nested folder named "build", not just a top-level one', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('admin', 'build', 'icon.svg')
+    const entries = await walkInputDir(tmpDir)
+    const allFiles = entries.flatMap(e => e.files)
+    expect(allFiles.every(f => !f.replace(/\\/g, '/').includes('/build/'))).toBe(true)
+  })
 })

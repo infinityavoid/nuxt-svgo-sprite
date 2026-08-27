@@ -15,12 +15,13 @@ type AstRoot = { type: 'root', children: AstNode[] }
 type AstNode = AstElement | { type: string, children?: AstNode[] }
 type AstParent = AstElement | AstRoot
 
-// Attribute allowlist for <symbol> elements (ported from svg-sprite/lib/svg-sprite/mode/symbol.js)
+// Attribute allowlist for <symbol> elements (ported from svg-sprite/lib/svg-sprite/mode/symbol.js,
+// minus event-handler attributes (onclick, onload, ...) — the sprite is inlined into every SSR
+// page's <body>, unlike svg-sprite's standalone sprite files, so we don't want icon SVGs able to
+// carry inline JS into the app's markup. See ADR pending from the Phase 14 audit.
 const SYMBOL_ATTRIBUTES = new Set([
   'id',
   'xml:base', 'xml:lang', 'xml:space',
-  'onfocusin', 'onfocusout', 'onactivate', 'onclick',
-  'onmousedown', 'onmouseup', 'onmouseover', 'onmousemove', 'onmouseout', 'onload',
   'alignment-baseline', 'baseline-shift', 'clip', 'clip-path', 'clip-rule',
   'color', 'color-interpolation', 'color-interpolation-filters', 'color-profile', 'color-rendering',
   'cursor', 'direction', 'display', 'dominant-baseline', 'enable-background',
@@ -40,8 +41,11 @@ const SYMBOL_ATTRIBUTES = new Set([
 
 const SPRITE_STYLE = 'position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0;'
 
-// Regex to detect files that are already sprites (contain <symbol>)
-const HAS_SYMBOL_RE = /<symbol[\s\S]*?>/i
+// Regex to detect files that are already sprites (contain <symbol>). Matched against
+// the source with comments stripped first, and requires a tag boundary after "symbol"
+// so a comment like "<!-- <symbol> -->" or an element named <symbolic> don't false-positive.
+const HAS_SYMBOL_RE = /<symbol[\s/>]/i
+const COMMENT_RE = /<!--[\s\S]*?-->/g
 
 export interface SpriteLogger {
   error(msg: string): void
@@ -53,12 +57,18 @@ export interface SpriteLogger {
 
 export const defaultSvgoConfig: SvgoConfig = {
   plugins: [
-    'preset-default',
+    // removeViewBox is pinned off explicitly (edge case 1) rather than relying on it
+    // being absent from SVGO's current preset-default — an upstream SVGO release could
+    // restore it, which would silently strip every symbol's viewBox.
+    { name: 'preset-default', params: { overrides: { removeViewBox: false } } },
     { name: 'inlineStyles', params: { onlyMatchedOnce: false } },
     { name: 'removeAttrs', params: { attrs: ['svg:id'] } },
     { name: 'removeDimensions' },
     { name: 'removeXMLNS' },
-  ],
+    // Icon SVGs are inlined into every SSR page; strip any embedded <script>/event
+    // handlers rather than trusting an arbitrary icon-pack download.
+    { name: 'removeScripts' },
+  ] as SvgoConfig['plugins'],
 }
 
 // ─── Custom SVGO plugins ──────────────────────────────────────────────────────
@@ -198,19 +208,32 @@ function iconIdPrefix(spriteName: string, iconId: string): string {
   return `${spriteName}__${safe}__`
 }
 
+// User svgoConfig.plugins, when provided, REPLACES the built-in default list rather
+// than merging with it — Nuxt/defu's array-concat merge would otherwise let the
+// defaults run a second time after the user's plugins and silently undo their
+// overrides. `svgoConfig` is intentionally NOT registered in defineNuxtModule's
+// `defaults`, so `options.svgoConfig` is undefined unless the user set it — see the
+// Phase 14 audit finding this fixes.
 function buildIconConfig(
-  baseCfg: SvgoConfig,
+  userSvgoConfig: SvgoConfig | undefined,
   spriteName: string,
   icon: IconMeta,
   optimizeFiles: boolean,
 ): SvgoConfig {
   const skipOptimization = !optimizeFiles || icon.raw === true
-  const basePlugins = skipOptimization ? [] : (baseCfg.plugins ?? [])
+  const optimizationPlugins = skipOptimization
+    ? []
+    : (userSvgoConfig?.plugins ?? defaultSvgoConfig.plugins ?? [])
   return {
     plugins: [
-      ...basePlugins,
+      ...optimizationPlugins,
+      // Structural plugins below always run, independent of optimizeFiles/raw and of
+      // the user's svgoConfig — they are not "optimization", they are invariants the
+      // sprite pipeline itself depends on (edge cases 2, 6, 10, 12).
+      { name: 'removeXMLProcInst' },
+      { name: 'removeDoctype' },
       makeInlineDefsPlugin(),
-      { name: 'prefixIds', params: { prefix: iconIdPrefix(spriteName, icon.id), delim: '' } },
+      { name: 'prefixIds', params: { prefix: iconIdPrefix(spriteName, icon.id), delim: '', prefixIds: true, prefixClassNames: false } },
       makeConvertToSymbolPlugin(icon.id),
     ] as SvgoConfig['plugins'],
   }
@@ -221,8 +244,11 @@ function buildIconConfig(
 // Synthesizes viewBox from width/height when viewBox is absent (edge case 9).
 function ensureViewBox(svg: string): string {
   if (/\bviewBox\s*=/.test(svg)) return svg
-  const w = svg.match(/<svg[^>]*\swidth\s*=\s*["']([0-9.]+)["']/)?.[1]
-  const h = svg.match(/<svg[^>]*\sheight\s*=\s*["']([0-9.]+)["']/)?.[1]
+  // Only the unitless/px cases are handled — other CSS units (em, pt, %, ...) on a
+  // root <svg> width/height are rare for icon assets and are left to the "no viewBox
+  // or dimensions" warning path below.
+  const w = svg.match(/<svg[^>]*\swidth\s*=\s*["']([0-9.]+)(?:px)?["']/)?.[1]
+  const h = svg.match(/<svg[^>]*\sheight\s*=\s*["']([0-9.]+)(?:px)?["']/)?.[1]
   if (w && h) {
     return svg.replace(/(<svg\b)/, `$1 viewBox="0 0 ${w} ${h}"`)
   }
@@ -239,7 +265,7 @@ function buildSpriteWrapper(symbols: string[]): string {
 
 export async function buildAllSprites(
   collections: { name: string, icons: IconMeta[] }[],
-  svgoConfig: SvgoConfig,
+  svgoConfig: SvgoConfig | undefined,
   optimizeFiles: boolean,
   logger: SpriteLogger,
 ): Promise<Map<string, string>> {
@@ -254,7 +280,7 @@ export async function buildAllSprites(
 
 export async function buildSprite(
   icons: IconMeta[],
-  svgoConfig: SvgoConfig,
+  svgoConfig: SvgoConfig | undefined,
   optimizeFiles: boolean,
   logger: SpriteLogger,
   spriteName = 'default',
@@ -276,8 +302,14 @@ export async function buildSprite(
       continue
     }
 
+    if (raw.trim() === '') {
+      logger.error(`"${icon.absolutePath}" is empty — skipping.`)
+      continue
+    }
+
     // Edge case 15: reject files that already contain <symbol> elements
-    if (HAS_SYMBOL_RE.test(raw)) {
+    // (checked with comments stripped, so "<!-- <symbol> -->" isn't a false positive)
+    if (HAS_SYMBOL_RE.test(raw.replace(COMMENT_RE, ''))) {
       logger.error(`"${icon.absolutePath}" contains <symbol> elements and cannot be used as an icon — skipping.`)
       continue
     }
@@ -293,6 +325,13 @@ export async function buildSprite(
     const config = buildIconConfig(svgoConfig, spriteName, icon, optimizeFiles)
     try {
       const result = optimize(input, config)
+      // convertToSymbol only renames a root <svg> — if the source's root element
+      // wasn't <svg> (or optimize somehow produced nothing), the result never became
+      // a <symbol>. Emitting it verbatim would silently corrupt the sprite.
+      if (!/^\s*<symbol[\s/>]/.test(result.data)) {
+        logger.error(`"${icon.absolutePath}" does not have an <svg> root element — skipping.`)
+        continue
+      }
       symbols.push(result.data)
     }
     catch (err) {

@@ -244,4 +244,103 @@ describe('input already contains <symbol>', () => {
     expect(mockLogger.error).toHaveBeenCalledOnce()
     expect(sprite).not.toContain('id="bad-input"')
   })
+
+  it('does not false-positive on a comment mentioning <symbol>', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><!-- <symbol> --><circle cx="12" cy="12" r="10"/></svg>'
+    const icon = await makeIconWithContent('commented', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(mockLogger.error).not.toHaveBeenCalled()
+    expect(sprite).toContain('id="commented"')
+  })
+})
+
+// ─── Phase 15 audit fixes ─────────────────────────────────────────────────────
+
+describe('svgoConfig override (replace, not merge)', () => {
+  it('a user plugin list fully replaces the defaults instead of running alongside them', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><!-- keep me --><circle cx="12" cy="12" r="10"/></svg>'
+    const icon = await makeIconWithContent('kept-comment', svg)
+    const userConfig: Parameters<typeof buildSprite>[1] = {
+      plugins: [
+        { name: 'preset-default', params: { overrides: { removeViewBox: false, removeComments: false } } },
+      ],
+    }
+    const sprite = await buildSprite([icon], userConfig, true, mockLogger)
+    // If defu-style array-concat merge were still happening, the bare 'preset-default'
+    // from defaultSvgoConfig would run afterwards with its own (comment-stripping) config
+    // and remove this regardless of the user's override.
+    expect(sprite).toContain('keep me')
+  })
+
+  it('falls back to defaultSvgoConfig when the user provides no svgoConfig', async () => {
+    const icon = await makeIcon('home')
+    const sprite = await buildSprite([icon], undefined, true, mockLogger)
+    expect(sprite).toContain('id="home"')
+  })
+})
+
+describe('XML prolog / doctype stripping on the raw path (edge case 10)', () => {
+  it('strips <?xml?> and <!DOCTYPE> for a raw icon', async () => {
+    const svg = '<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
+      + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
+    const rawIcon: IconMeta = { ...(await makeIconWithContent('raw-prolog', svg)), raw: true }
+    const sprite = await buildSprite([rawIcon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).not.toContain('<?xml')
+    expect(sprite).not.toContain('<!DOCTYPE')
+    expect(sprite).toContain('id="raw-prolog"')
+  })
+
+  it('strips <?xml?> and <!DOCTYPE> when optimizeFiles is false', async () => {
+    const svg = '<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
+      + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
+    const icon = await makeIconWithContent('noopt-prolog', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, false, mockLogger)
+    expect(sprite).not.toContain('<?xml')
+    expect(sprite).not.toContain('<!DOCTYPE')
+  })
+})
+
+describe('non-<svg>-root and empty-file rejection', () => {
+  it('logs error and skips a file whose root element is not <svg>', async () => {
+    const icon = await makeIconWithContent('not-svg', '<html><body>x</body></html>')
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(mockLogger.error).toHaveBeenCalledOnce()
+    expect(sprite).not.toContain('not-svg')
+    expect(sprite).not.toContain('<html')
+  })
+
+  it('logs error and skips an empty file', async () => {
+    const icon = await makeIconWithContent('empty', '')
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(mockLogger.error).toHaveBeenCalledOnce()
+    expect(sprite).not.toContain('id="empty"')
+  })
+})
+
+describe('prefixClassNames disabled', () => {
+  it('does not rewrite user class names', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path class="stroke" d="M1 1h9"/></svg>'
+    const icon = await makeIconWithContent('classy', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).toContain('class="stroke"')
+  })
+})
+
+describe('script stripping', () => {
+  it('removes <script> elements and on* event handlers', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" onload="alert(1)"><script>alert(2)</script><circle cx="12" cy="12" r="10"/></svg>'
+    const icon = await makeIconWithContent('scripty', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).not.toContain('<script')
+    expect(sprite).not.toContain('onload')
+  })
+})
+
+describe('missing dimensions — px unit handling', () => {
+  it('synthesizes viewBox from width/height expressed in px', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24px" height="24px"><rect width="24" height="24"/></svg>'
+    const icon = await makeIconWithContent('px-dims', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).toContain('viewBox="0 0 24 24"')
+  })
 })

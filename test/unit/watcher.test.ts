@@ -83,6 +83,13 @@ describe('findOwningCollection', () => {
     const result = findOwningCollection(path.join(iconRoot, 'home.svg'), [])
     expect(result).toBeUndefined()
   })
+
+  it('returns undefined for a file in a brand new subfolder, instead of misrouting it to default', () => {
+    // Regression: a prefix-based match would route this to `default` (whose inputDir
+    // is the tree root) since iconRoot is a string-prefix of every path under it.
+    const result = findOwningCollection(path.join(iconRoot, 'social', 'twitter.svg'), collections)
+    expect(result).toBeUndefined()
+  })
 })
 
 // ── handleWatchEvent ──────────────────────────────────────────────────────────
@@ -151,7 +158,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, collections, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, mockLogger, onChange)
 
     await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'home.svg')))
     await new Promise(r => setTimeout(r, 150))
@@ -163,7 +170,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, collections, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, mockLogger, onChange)
 
     // Construct a relative path that resolves OUTSIDE all known collection dirs
     const outsideAbs = path.join(os.tmpdir(), 'completely-outside', 'icon.svg')
@@ -178,7 +185,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, collections, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, mockLogger, onChange)
 
     await nuxt.triggerWatch('change', 'assets/icons/readme.md')
     expect(onChange).not.toHaveBeenCalled()
@@ -189,7 +196,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, collections, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, mockLogger, onChange)
 
     await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'admin', 'star.svg')))
     await new Promise(r => setTimeout(r, 150))
@@ -200,7 +207,28 @@ describe('setupWatcher', () => {
   it('returns a cleanup function that cancels all debounced handlers', () => {
     const nuxt = makeMockNuxt(iconRoot)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    const cleanup = setupWatcher(nuxt, collections, mockLogger, onChange)
+    const cleanup = setupWatcher(nuxt, { current: collections }, mockLogger, onChange)
     expect(() => cleanup()).not.toThrow()
+  })
+
+  it('reads collectionsRef.current live, not a setup-time snapshot (ADR-011 warning uses fresh icons)', async () => {
+    const rootDir = iconRoot
+    const nuxt = makeMockNuxt(rootDir)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    const ref = { current: collections }
+    setupWatcher(nuxt, ref, mockLogger, onChange)
+
+    // Mutate the ref after setup, as a rebuild handler would: admin now has an icon.
+    const adminWithIcon = makeCollection('admin', path.join(iconRoot, 'admin'), ['admin'], [
+      { id: 'admin-star', componentName: 'UseAdminStar', absolutePath: path.join(iconRoot, 'admin', 'star.svg') },
+    ])
+    ref.current = ref.current.map(c => (c.name === 'admin' ? adminWithIcon : c))
+
+    await nuxt.triggerWatch('unlink', path.relative(rootDir, path.join(iconRoot, 'admin', 'star.svg')))
+    await new Promise(r => setTimeout(r, 150))
+
+    // The setup-time snapshot had no icons for admin, so a stale-closure implementation
+    // would never find `admin-star` to warn about.
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('admin-star'))
   })
 })
