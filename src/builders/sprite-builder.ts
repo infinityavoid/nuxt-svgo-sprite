@@ -295,12 +295,32 @@ function buildSpriteWrapper(symbols: string[]): string {
  */
 export type OnIconResult = (icon: IconMeta, included: boolean) => void
 
+/**
+ * Optional cross-call cache, keyed by absolute icon path, letting buildSprite skip
+ * re-reading and re-optimizing a file whose mtime hasn't changed since it was last
+ * processed. Pointless for a one-shot cold build (every icon is new to the cache),
+ * but real HMR rebuilds only touch one or two files while re-scanning the rest of
+ * their collection — without this, every keystroke-triggered rebuild of a large flat
+ * collection re-reads and re-runs SVGO over every unchanged icon in it too. Callers
+ * (module.ts, rebuild.ts) create ONE cache and pass the same instance to every
+ * buildSprite/buildAllSprites call for the lifetime of the dev server.
+ * `symbol: null` caches a REJECTED icon (edge cases like malformed/non-<svg>-root) —
+ * skips re-reading it and re-logging the same error on every unrelated rebuild until
+ * the file actually changes.
+ */
+export interface SymbolCacheEntry {
+  mtimeMs: number
+  symbol: string | null
+}
+export type SymbolCache = Map<string, SymbolCacheEntry>
+
 export async function buildAllSprites(
   collections: { name: string, icons: IconMeta[] }[],
   svgoConfig: SvgoConfig | undefined,
   optimizeFiles: boolean,
   logger: SpriteLogger,
   onIconResult?: (collectionName: string, icon: IconMeta, included: boolean) => void,
+  cache?: SymbolCache,
 ): Promise<Map<string, string>> {
   const contents = new Map<string, string>()
   await Promise.all(
@@ -308,7 +328,7 @@ export async function buildAllSprites(
       const perIconCallback: OnIconResult | undefined = onIconResult
         ? (icon, included) => onIconResult(col.name, icon, included)
         : undefined
-      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name, perIconCallback))
+      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name, perIconCallback, cache))
     }),
   )
   return contents
@@ -321,6 +341,7 @@ export async function buildSprite(
   logger: SpriteLogger,
   spriteName = 'default',
   onIconResult?: OnIconResult,
+  cache?: SymbolCache,
 ): Promise<string> {
   if (icons.length === 0) {
     logger.warn('No icons found in collection — sprite skipped.')
@@ -332,24 +353,52 @@ export async function buildSprite(
   // Read every icon file concurrently (I/O-bound, independent of each other) instead
   // of one at a time — Promise.all preserves array order regardless of completion
   // order, so the rest of the per-icon processing below stays sequential/ordered.
-  const reads = await Promise.all(icons.map(async (icon) => {
+  // A cache hit (mtime unchanged since last processed) skips the read entirely.
+  type ReadResult
+    = { icon: IconMeta, kind: 'error' }
+      | { icon: IconMeta, kind: 'cached', entry: SymbolCacheEntry }
+      | { icon: IconMeta, kind: 'fresh', raw: string, mtimeMs: number }
+
+  const reads: ReadResult[] = await Promise.all(icons.map(async (icon): Promise<ReadResult> => {
     try {
-      return { icon, raw: await fsp.readFile(icon.absolutePath, 'utf-8') }
+      const stat = await fsp.stat(icon.absolutePath)
+      const cached = cache?.get(icon.absolutePath)
+      if (cached && cached.mtimeMs === stat.mtimeMs) {
+        return { icon, kind: 'cached', entry: cached }
+      }
+      const raw = await fsp.readFile(icon.absolutePath, 'utf-8')
+      return { icon, kind: 'fresh', raw, mtimeMs: stat.mtimeMs }
     }
     catch (err) {
       logger.error(`Failed to read "${icon.absolutePath}": ${String(err)} — skipping.`)
-      return { icon, raw: null as string | null }
+      return { icon, kind: 'error' }
     }
   }))
 
-  for (const { icon, raw } of reads) {
-    if (raw === null) {
+  for (const result of reads) {
+    const { icon } = result
+
+    if (result.kind === 'error') {
       onIconResult?.(icon, false)
       continue
     }
 
+    if (result.kind === 'cached') {
+      if (result.entry.symbol !== null) {
+        symbols.push(result.entry.symbol)
+        onIconResult?.(icon, true)
+      }
+      else {
+        onIconResult?.(icon, false)
+      }
+      continue
+    }
+
+    const { raw, mtimeMs } = result
+
     if (raw.trim() === '') {
       logger.error(`"${icon.absolutePath}" is empty — skipping.`)
+      cache?.set(icon.absolutePath, { mtimeMs, symbol: null })
       onIconResult?.(icon, false)
       continue
     }
@@ -359,6 +408,7 @@ export async function buildSprite(
     // "<!-- <symbol> -->" isn't a false positive).
     if (HAS_SYMBOL_RE.test(raw.replace(COMMENT_RE, ''))) {
       logger.error(`"${icon.absolutePath}" contains <symbol> elements and cannot be used as an icon — skipping.`)
+      cache?.set(icon.absolutePath, { mtimeMs, symbol: null })
       onIconResult?.(icon, false)
       continue
     }
@@ -374,24 +424,27 @@ export async function buildSprite(
 
     const config = buildIconConfig(svgoConfig, spriteName, icon, optimizeFiles)
     try {
-      const result = optimize(input, config)
+      const optimized = optimize(input, config)
       // convertToSymbol only renames a root <svg> — if the source's root element
       // wasn't <svg> (or optimize somehow produced nothing), the result never became
       // a <symbol>. Emitting it verbatim would silently corrupt the sprite.
-      if (!/^\s*<symbol[\s/>]/.test(result.data)) {
+      if (!/^\s*<symbol[\s/>]/.test(optimized.data)) {
         logger.error(`"${icon.absolutePath}" does not have an <svg> root element — skipping.`)
+        cache?.set(icon.absolutePath, { mtimeMs, symbol: null })
         onIconResult?.(icon, false)
         continue
       }
       if (missingDimensions) {
         logger.warn(`"${icon.absolutePath}" has no viewBox or dimensions — included as-is, may not scale correctly.`)
       }
-      symbols.push(result.data)
+      symbols.push(optimized.data)
+      cache?.set(icon.absolutePath, { mtimeMs, symbol: optimized.data })
       onIconResult?.(icon, true)
     }
     catch (err) {
       // Malformed SVG — log and skip, do not fail the whole sprite.
       logger.error(`Failed to process "${icon.absolutePath}": ${String(err)} — skipping.`)
+      cache?.set(icon.absolutePath, { mtimeMs, symbol: null })
       onIconResult?.(icon, false)
     }
   }

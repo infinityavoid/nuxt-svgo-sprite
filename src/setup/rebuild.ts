@@ -1,7 +1,7 @@
 import { updateTemplates } from '@nuxt/kit'
 import type { Config as SvgoConfig } from 'svgo'
 import { rebuildSingleCollection } from '../builders/collection-builder'
-import { buildSprite } from '../builders/sprite-builder'
+import { buildSprite, type SymbolCache } from '../builders/sprite-builder'
 import { buildIconTypesContent, registerUseComponent } from '../templates/templates'
 import type { IconMeta, SpriteCollection } from '../types/types'
 import type { TemplateHandles } from '../templates/templates'
@@ -29,6 +29,10 @@ export interface RebuildContext {
   injectedCollectionNames: Set<string>
   logger: RebuildLogger
   broadcastRefresh?: () => Promise<void>
+  /** Same instance the cold build populated — lets an unchanged icon in the rescanned
+   * collection skip re-reading/re-optimizing. Optional for callers that don't need it
+   * (e.g. tests). */
+  symbolCache?: SymbolCache
 }
 
 export function createRebuildHandler(ctx: RebuildContext) {
@@ -75,6 +79,7 @@ export function createRebuildHandler(ctx: RebuildContext) {
         ctx.logger,
         rescanned.name,
         (icon, included) => { if (included) succeeded.push(icon) },
+        ctx.symbolCache,
       )
       const updatedCol = { ...rescanned, icons: succeeded }
 

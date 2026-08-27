@@ -6,7 +6,7 @@ import {
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { version } from '../package.json'
-import { buildAllSprites } from './builders/sprite-builder'
+import { buildAllSprites, type SymbolCache } from './builders/sprite-builder'
 import { buildCollectionsFromDir } from './builders/collection-builder'
 import { setupWatcher } from './watcher/watcher'
 import { buildIconTypesContent, setupTemplates } from './templates/templates'
@@ -82,6 +82,11 @@ export default defineNuxtModule<ModuleOptions>({
     // rejected icon still gets a type-checking `SvgUse name="broken"` and a
     // `<UseBroken />` component that both compile but render nothing.
     const succeededByCollection = new Map<string, IconMeta[]>()
+    // Shared for the module's lifetime: the cold build below populates it, and every
+    // HMR rebuild (rebuild.ts) reuses the SAME instance so an unchanged icon skips
+    // re-reading and re-optimizing on every keystroke-triggered rebuild of the rest
+    // of its collection. No effect on a one-shot production build.
+    const symbolCache: SymbolCache = new Map()
     const spriteContents = await buildAllSprites(
       collections,
       options.svgoConfig,
@@ -93,6 +98,7 @@ export default defineNuxtModule<ModuleOptions>({
         if (list) list.push(icon)
         else succeededByCollection.set(collectionName, [icon])
       },
+      symbolCache,
     )
     const effectiveCollections: SpriteCollection[] = collections.map(c => ({
       ...c,
@@ -157,6 +163,7 @@ export default defineNuxtModule<ModuleOptions>({
         injectedCollectionNames,
         logger,
         broadcastRefresh,
+        symbolCache,
       }),
     )
 

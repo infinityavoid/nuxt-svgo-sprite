@@ -230,6 +230,27 @@ describe('createRebuildHandler', () => {
     expect(registerUseComponent).toHaveBeenCalledWith(goodIcon)
   })
 
+  it('passes ctx.symbolCache through to buildSprite so unchanged icons can be skipped on rescan', async () => {
+    const col = makeCollection('default', '/icons')
+    const updatedCol = makeCollection('default', '/icons');
+    (rebuildSingleCollection as ReturnType<typeof vi.fn>).mockResolvedValue(updatedCol)
+
+    const symbolCache = new Map()
+    const ctx = makeCtx({ symbolCache })
+    const handler = createRebuildHandler(ctx)
+    await handler(col, 'change', '/icons/home.svg')
+
+    expect(buildSprite).toHaveBeenCalledWith(
+      updatedCol.icons,
+      ctx.options.svgoConfig,
+      ctx.options.optimizeFiles,
+      mockLogger,
+      'default',
+      expect.any(Function),
+      symbolCache,
+    )
+  })
+
   it('calls broadcastRefresh when provided', async () => {
     const col = makeCollection('default', '/icons')
     const updatedCol = makeCollection('default', '/icons');
@@ -261,6 +282,7 @@ describe('createRebuildHandler', () => {
       mockLogger,
       'admin',
       expect.any(Function),
+      undefined,
     )
   })
 
