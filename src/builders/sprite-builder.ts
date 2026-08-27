@@ -209,7 +209,7 @@ function iconIdPrefix(spriteName: string, iconId: string): string {
 // User svgoConfig.plugins, when provided, REPLACES the built-in default list rather
 // than merging with it — Nuxt/defu's array-concat merge would otherwise let the
 // defaults run a second time after the user's plugins and silently undo their
-// overrides (see ADR-021). `svgoConfig` is intentionally NOT registered in
+// overrides. `svgoConfig` is intentionally NOT registered in
 // defineNuxtModule's `defaults`, so `options.svgoConfig` is undefined unless the user
 // set it. Non-`plugins` keys of the user's config (multipass, floatPrecision, js2svg,
 // ...) are passed through as-is; only `plugins` gets the replace treatment.

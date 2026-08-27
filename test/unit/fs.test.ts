@@ -173,4 +173,26 @@ describe('walkInputDir', () => {
     const allFiles = entries.flatMap(e => e.files)
     expect(allFiles.every(f => !f.replace(/\\/g, '/').includes('/build/'))).toBe(true)
   })
+
+  it('warns when "default/" prefix-stripping makes a named folder collide with an unrelated same-named one', async () => {
+    // "nested/" and "default/nested/" both key to segments ["nested"] — the entry
+    // ends up with files from two different real directories, which would silently
+    // drop one of them on the next HMR rebuild (only one directory gets watched).
+    await writeSvg('nested', 'a.svg')
+    await writeSvg('default', 'nested', 'b.svg')
+    const logger = { warn: vi.fn() }
+    const entries = await walkInputDir(tmpDir, logger)
+
+    const nested = entries.find(e => e.segments.length === 1 && e.segments[0] === 'nested')!
+    expect(nested.files).toHaveLength(2)
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('maps to more than one real folder'))
+  })
+
+  it('does not warn about the default collection spanning root + default/ — that merge is intentional', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('default', 'extra.svg')
+    const logger = { warn: vi.fn() }
+    await walkInputDir(tmpDir, logger)
+    expect(logger.warn).not.toHaveBeenCalled()
+  })
 })

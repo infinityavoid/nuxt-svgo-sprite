@@ -34,7 +34,7 @@ export default defineNuxtModule<ModuleOptions>({
     // concatenates arrays rather than replacing them, so a default svgoConfig.plugins
     // array would run alongside (not instead of) the user's — silently undoing their
     // overrides. sprite-builder.ts falls back to its own defaultSvgoConfig when the
-    // user provides none (see ADR-021 in 07-Decisions.md).
+    // user provides none.
     autoInjectSprite: false,
   },
 
