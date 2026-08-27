@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest'
-import { buildIconTypesContent } from '../../src/templates/templates'
+import { describe, it, expect, vi } from 'vitest'
+import { addTemplate, addComponent } from '@nuxt/kit'
+import { buildIconTypesContent, registerUseComponent } from '../../src/templates/templates'
 import type { SpriteCollection } from '../../src/types/types'
+
+vi.mock('@nuxt/kit', () => ({
+  addTemplate: vi.fn((opts: { filename: string, getContents: () => string }) => ({ dst: `/build/${opts.filename}` })),
+  addComponent: vi.fn(),
+}))
 
 function makeCol(
   name: string,
@@ -86,5 +92,39 @@ describe('buildIconTypesContent', () => {
   it('output ends with a newline', () => {
     const content = buildIconTypesContent([makeCol('default', 'DefaultIconName', ['home'])])
     expect(content.endsWith('\n')).toBe(true)
+  })
+})
+
+describe('registerUseComponent', () => {
+  it('generates a real newline between </template> and <script setup>', () => {
+    // Regression: a bare `</template><script setup lang="ts">` on one line makes
+    // vue-tsc fail the consumer's typecheck with "';' expected" — the Vite/SFC
+    // compiler doesn't care, so this only ever showed up as a broken `vue-tsc` run
+    // in a real project, not in this repo's own build.
+    const icon = { id: 'home', componentName: 'UseHome', absolutePath: '/icons/home.svg' }
+    registerUseComponent(icon)
+
+    const call = vi.mocked(addTemplate).mock.calls.at(-1)![0] as { getContents: () => string }
+    const content = call.getContents()
+
+    expect(content).toMatch(/<\/template>\r?\n<script setup/)
+    expect(content).not.toMatch(/<\/template><script setup/)
+  })
+
+  it('registers the component under the icon\'s componentName, pointing at the generated template', () => {
+    const icon = { id: 'admin-star', componentName: 'UseAdminStar', absolutePath: '/icons/admin/star.svg' }
+    registerUseComponent(icon)
+
+    expect(vi.mocked(addComponent)).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'UseAdminStar' }),
+    )
+  })
+
+  it('the generated component references the icon id in its <use> href', () => {
+    const icon = { id: 'home', componentName: 'UseHome', absolutePath: '/icons/home.svg' }
+    registerUseComponent(icon)
+
+    const call = vi.mocked(addTemplate).mock.calls.at(-1)![0] as { getContents: () => string }
+    expect(call.getContents()).toContain('href="#home"')
   })
 })

@@ -305,9 +305,23 @@ describe('svgoConfig override (replace, not merge)', () => {
     const sprite = await buildSprite([icon], undefined, true, mockLogger)
     expect(sprite).toContain('id="home"')
   })
+
+  it('non-plugins keys of the user svgoConfig (e.g. js2svg) are honored, not silently dropped', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
+    const icon = await makeIconWithContent('pretty', svg)
+    const userConfig: Parameters<typeof buildSprite>[1] = {
+      plugins: ['preset-default'],
+      js2svg: { pretty: true, indent: 4 },
+    }
+    const sprite = await buildSprite([icon], userConfig, true, mockLogger)
+    // js2svg.pretty/indent inserts real indentation into the serialized output — if
+    // the option were dropped, the child element would stay on the same line as its
+    // parent with no leading spaces.
+    expect(sprite).toContain('    <circle')
+  })
 })
 
-describe('XML prolog / doctype stripping on the raw path (edge case 10)', () => {
+describe('XML prolog / doctype stripping on the raw path', () => {
   it('strips <?xml?> and <!DOCTYPE> for a raw icon', async () => {
     const svg = '<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
       + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
@@ -345,12 +359,31 @@ describe('non-<svg>-root and empty-file rejection', () => {
   })
 })
 
-describe('prefixClassNames disabled', () => {
-  it('does not rewrite user class names', async () => {
+describe('prefixClassNames — conditional on whether a <style> block can survive', () => {
+  it('optimized path: does not rewrite user class names (inlineStyles already removed the <style> block)', async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path class="stroke" d="M1 1h9"/></svg>'
     const icon = await makeIconWithContent('classy', svg)
     const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
     expect(sprite).toContain('class="stroke"')
+  })
+
+  it('raw path: DOES prefix class names, because the <style> block survives into the shared sprite document', async () => {
+    // Regression: prefixClassNames: false unconditionally meant two .raw.svg icons
+    // each shipping <style>.cls-1{fill:red}</style> collided in the merged sprite —
+    // a <style> tag inside inline SVG is document-scoped, so the second icon's rule
+    // silently overrode the first's.
+    const svgA = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><style>.cls-1{fill:red}</style><path class="cls-1" d="M1 1h9"/></svg>'
+    const svgB = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><style>.cls-1{fill:blue}</style><path class="cls-1" d="M2 2h9"/></svg>'
+    const iconA: IconMeta = { ...(await makeIconWithContent('style-a', svgA)), raw: true }
+    const iconB: IconMeta = { ...(await makeIconWithContent('style-b', svgB)), raw: true }
+    const sprite = await buildSprite([iconA, iconB], defaultSvgoConfig, true, mockLogger)
+
+    // Both rules must survive, under DISTINCT (prefixed) class names — not the same
+    // ".cls-1" for both, which would make the second definition win for both icons.
+    expect(sprite).toContain('fill:red')
+    expect(sprite).toContain('fill:blue')
+    const classNames = [...sprite.matchAll(/class="([^"]+)"/g)].map(m => m[1])
+    expect(new Set(classNames).size).toBe(2)
   })
 })
 

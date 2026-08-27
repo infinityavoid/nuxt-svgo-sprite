@@ -82,6 +82,24 @@ describe('buildCollectionsFromDir', () => {
     expect(col!.icons[0]!.componentName).toBe('UseAdminButtonsClose')
   })
 
+  it('a subfolder nested under default/ gets an inputDir that actually exists on disk', async () => {
+    // Regression: walkInputDir strips the leading "default" segment for NAMING
+    // purposes (default/sub/icon.svg -> segments ["sub"]), but rejoining just those
+    // segments onto the root used to point inputDir at "<root>/sub" — a directory
+    // that was never created — instead of the real "<root>/default/sub". That broke
+    // the watcher (it could never find this collection's files again) and HMR
+    // rebuilds (rebuildSingleCollection would read a nonexistent dir and silently
+    // return zero icons).
+    await writeSvg('default', 'sub', 'icon.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('sub')
+    const realDir = path.join(tmpDir, 'default', 'sub')
+    expect(cols[0]!.inputDir).toBe(realDir)
+    await expect(fsp.access(cols[0]!.inputDir)).resolves.toBeUndefined()
+  })
+
   it('multiple subfolders produce multiple independent collections', async () => {
     await writeSvg('home.svg')
     await writeSvg('admin', 'star.svg')
@@ -192,15 +210,37 @@ describe('buildCollectionsFromDir', () => {
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Collection name collision'))
   })
 
-  it('a folder literally named "Default" collides with the implicit default collection', async () => {
+  it('a folder named "Default" (any case) merges into the default collection like "default" does — no icons lost, no collision', async () => {
+    // Regression: this used to reach the cross-collection name-collision pass, which
+    // (before the case-insensitive fix in utils/fs.ts) dropped ALL root-level icons,
+    // not the "Default" folder's — an unrecoverable data-loss regression, since the
+    // warning told the user to "rename (root)", which isn't a folder they can rename.
     await writeSvg('home.svg')
     await writeSvg('Default', 'extra.svg')
     const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
 
-    // Exactly one 'default' collection survives — no duplicate DefaultIconName export.
-    const defaultCols = cols.filter(c => c.name === 'default')
-    expect(defaultCols).toHaveLength(1)
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Collection name collision'))
+    expect(cols).toHaveLength(1)
+    expect(cols[0]!.name).toBe('default')
+    expect(cols[0]!.icons.map(i => i.id).sort()).toEqual(['extra', 'home'])
+    expect(mockLogger.warn).not.toHaveBeenCalled()
+  })
+
+  it('root icons survive a genuine collection-name collision — the root always wins, the other folder is skipped', async () => {
+    // A collision that ISN'T resolved by the default/-merge rule above (e.g. two
+    // differently-cased/spelled names that both sanitize to a name equal to root's
+    // "default") must never silently drop root-level icons — that's unrecoverable,
+    // since there's no "(root)" folder a user could rename to fix it.
+    await writeSvg('home.svg')
+    await writeSvg('  Default  ', 'extra.svg') // sanitizes to "default" too, via a path fs.ts's literal check misses
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    const defaultCol = cols.find(c => c.name === 'default')!
+    expect(defaultCol.icons.map(i => i.id)).toEqual(['home'])
+    const [message] = mockLogger.warn.mock.calls[0]!
+    expect(message).toContain('Collection name collision')
+    // The instruction must point at the renameable folder, never at "(root)".
+    expect(message).toMatch(/Rename "\s*Default\s*"/)
+    expect(message).not.toMatch(/Rename "\(root\)"/)
   })
 
   it('two collections whose icons derive the same symbol id: the later icon is skipped with a warning', async () => {

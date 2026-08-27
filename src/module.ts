@@ -34,7 +34,7 @@ export default defineNuxtModule<ModuleOptions>({
     // concatenates arrays rather than replacing them, so a default svgoConfig.plugins
     // array would run alongside (not instead of) the user's — silently undoing their
     // overrides. sprite-builder.ts falls back to its own defaultSvgoConfig when the
-    // user provides none. See the Phase 14 audit / ADR pending in 07-Decisions.md.
+    // user provides none (see ADR-021 in 07-Decisions.md).
     autoInjectSprite: false,
   },
 
@@ -60,7 +60,18 @@ export default defineNuxtModule<ModuleOptions>({
 
     const collections = await buildCollectionsFromDir(iconDir, options.componentPrefix!, logger)
     if (collections.length === 0) {
+      // Still register SvgUse and an (empty) icon-names.d.ts rather than fully
+      // bailing — an existing-but-not-yet-populated inputDir is the first thing a
+      // fresh install hits, and README/generated-types usage of `SvgUse`/
+      // `AllIconName` should not error just because no icons exist yet. The watcher
+      // isn't set up here: with zero known collections there's nothing for it to
+      // route events to (a brand-new collection folder needs a restart regardless —
+      // see watcher.ts), so the extra wiring wouldn't do anything useful yet.
       logger.warn('No SVG icons found in input directory — sprite generation skipped.')
+      const handles = setupTemplates([], options, new Map(), () => buildIconTypesContent([]))
+      nuxt.hook('prepare:types', ({ references }) => {
+        references.push({ path: path.resolve(nuxt.options.buildDir, handles.typeTemplateName) })
+      })
       return
     }
 
@@ -69,8 +80,7 @@ export default defineNuxtModule<ModuleOptions>({
     // processing (unreadable, empty, malformed, non-<svg> root). Generated types and
     // Use* components must be built from THIS set, not the raw walk result, or a
     // rejected icon still gets a type-checking `SvgUse name="broken"` and a
-    // `<UseBroken />` component that both compile but render nothing (found by
-    // adversarial testing).
+    // `<UseBroken />` component that both compile but render nothing.
     const succeededByCollection = new Map<string, IconMeta[]>()
     const spriteContents = await buildAllSprites(
       collections,
@@ -130,6 +140,7 @@ export default defineNuxtModule<ModuleOptions>({
     const cleanup = setupWatcher(
       nuxt,
       collectionsRef,
+      iconDir,
       logger,
       createRebuildHandler({
         options: {

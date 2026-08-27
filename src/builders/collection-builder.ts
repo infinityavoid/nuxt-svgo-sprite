@@ -123,11 +123,17 @@ export async function buildCollectionsFromDir(
     const icons = processFiles(files, sanitizedSegments, name, componentPrefix, logger)
     if (icons.length === 0) continue
 
-    // Default collection (segments []) → inputDir is the tree root.
-    // Named collections → inputDir uses the original (filesystem) segments.
+    // Default collection (segments []) → inputDir is the tree root. Named
+    // collections → derive inputDir from an actual file's real path, not by
+    // rejoining `segments` onto the root: walkInputDir strips a leading `default`
+    // segment for NAMING purposes (e.g. `default/nested/x.svg` → segments
+    // `['nested']`), but the file's real directory still physically contains
+    // `default/` — rejoining `segments` alone would point at a directory that
+    // doesn't exist (`<root>/nested` instead of `<root>/default/nested`), which
+    // then made the watcher/rebuild path unable to ever find these files again.
     const collectionDir = segments.length === 0
       ? resolvedInputDir
-      : path.join(resolvedInputDir, ...segments)
+      : path.dirname(files[0]!)
 
     candidates.push({
       collection: {
@@ -142,7 +148,11 @@ export async function buildCollectionsFromDir(
     })
   }
 
-  // Global pass 1: collection-name uniqueness across the whole tree.
+  // Global pass 1: collection-name uniqueness across the whole tree. The root
+  // ("(root)", segments []) always wins a collision — it can't be "renamed" to
+  // resolve one the way a real subfolder can, and silently dropping every
+  // root-level icon is a worse outcome than dropping a named subfolder's icons.
+  candidates.sort((a, b) => (a.rawPath === '(root)' ? -1 : b.rawPath === '(root)' ? 1 : 0))
   const seenNames = new Map<string, string>()
   const named: { collection: SpriteCollection, rawPath: string }[] = []
   for (const candidate of candidates) {
@@ -150,8 +160,8 @@ export async function buildCollectionsFromDir(
     if (existingPath !== undefined) {
       logger.warn(
         `Collection name collision: folder "${candidate.rawPath}" normalizes to the same collection `
-        + `name ("${candidate.collection.name}") as folder "${existingPath}". Skipping "${candidate.rawPath}" — `
-        + `rename one of the folders.`,
+        + `name ("${candidate.collection.name}") as folder "${existingPath}". Rename "${candidate.rawPath}" `
+        + `to resolve this — its icons are excluded until you do.`,
       )
       continue
     }

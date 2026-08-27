@@ -52,7 +52,11 @@ export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Pro
     parts.pop() // remove filename
 
     let segments: string[]
-    if (parts.length > 0 && parts[0] === 'default') {
+    // Case-insensitive: on case-insensitive filesystems (Windows, default macOS)
+    // "default" and "Default" are literally the same directory, and even where
+    // they aren't (case-sensitive Linux), treating both as the merge folder avoids
+    // a name collision between two folders whose sanitized name is identical.
+    if (parts.length > 0 && parts[0]!.toLowerCase() === 'default') {
       // 'default/' at root merges direct files into the default collection;
       // deeper subdirs under 'default/' become named collections (without the 'default' prefix).
       segments = parts.slice(1)

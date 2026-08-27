@@ -160,7 +160,7 @@ function clientHtml(): string {
       }
       app.innerHTML = collections.map(function(col) {
         var icons = col.icons.map(function(icon) {
-          var src = '/__nuxt-svgo-sprite/svg/' + encodeURIComponent(col.name) + '/' + encodeURIComponent(icon.id);
+          var src = '/__nuxt-svgo-sprite/svg/' + col.name + '/' + icon.id;
           return '<div class="icon-card" title="' + esc(icon.componentName) + '">'
             + '<img class="icon-preview" src="' + src + '" alt="' + esc(icon.id) + '" onerror="this.style.opacity=0.2">'
             + '<span class="icon-id">' + esc(icon.id) + '</span>'
@@ -208,8 +208,11 @@ export function createDevtoolsMiddleware(
 
     const svgMatch = url.match(/^\/svg\/([^/]+)\/([^/]+)$/)
     if (svgMatch) {
-      const colName = decodeURIComponent(svgMatch[1]!)
-      const iconId = decodeURIComponent(svgMatch[2]!)
+      // Collection names and icon ids are always [A-Za-z0-9-] by construction (see
+      // resolveIconPreviewPath's docstring), so no URL encoding round-trip is needed
+      // here — decoding would only add a URIError throw path for malformed input.
+      const colName = svgMatch[1]!
+      const iconId = svgMatch[2]!
       const absPath = resolveIconPreviewPath(colName, iconId, collectionsRef.current)
       if (absPath) {
         fsp.readFile(absPath, 'utf-8')

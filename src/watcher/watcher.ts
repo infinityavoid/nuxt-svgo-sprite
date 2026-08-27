@@ -20,9 +20,8 @@ export type OnCollectionChange = (
  * own folder (segments are collection boundaries — ADR-002, no namespacing within
  * one collection). A prefix/startsWith match would wrongly route a file in a brand
  * new, not-yet-known subfolder to its nearest ancestor collection (typically
- * "default", since its inputDir is the tree root) instead of surfacing the
- * "restart the dev server" warning — see the Phase 14 audit.
- * The one exception is the `default/` merge folder (utils/fs.ts): files placed
+ * "default", since its inputDir is the tree root) instead of correctly reporting no
+ * owner. The one exception is the `default/` merge folder (utils/fs.ts): files placed
  * directly in `<inputDir>/default/` belong to the default collection even though its
  * own `inputDir` is the tree root, not `<inputDir>/default`.
  */
@@ -81,9 +80,11 @@ export async function handleWatchEvent(
 export function setupWatcher(
   nuxt: Nuxt,
   collectionsRef: { current: SpriteCollection[] },
+  resolvedInputDir: string,
   logger: WatcherLogger,
   onCollectionChange: OnCollectionChange,
 ): () => void {
+  const inputDirPrefix = resolvedInputDir.endsWith(path.sep) ? resolvedInputDir : resolvedInputDir + path.sep
   const handlers = new Map(
     collectionsRef.current.map(collection => [
       collection.name,
@@ -98,19 +99,17 @@ export function setupWatcher(
   nuxt.hook('builder:watch', async (event, relativePath) => {
     if (!/\.svg$/i.test(relativePath)) return
 
-    // `relativePath` is already absolute on recent Nuxt (path.resolve is then a
-    // no-op), but on Nuxt versions where builder:watch reports a path relative to
-    // srcDir rather than rootDir, resolving against rootDir alone silently finds no
-    // owning collection whenever srcDir !== rootDir. Try both before giving up.
-    const fromRoot = path.resolve(nuxt.options.rootDir, relativePath)
-    const absPath = findOwningCollection(fromRoot, collectionsRef.current)
-      ? fromRoot
-      : path.resolve(nuxt.options.srcDir, relativePath)
+    const absPath = path.resolve(nuxt.options.rootDir, relativePath)
     const collection = findOwningCollection(absPath, collectionsRef.current)
     if (!collection) {
-      logger.warn(
-        `SVG changed outside known collections ("${relativePath}"). Restart the dev server to pick up new collections.`,
-      )
+      // Nuxt's builder:watch fires for every changed file under srcDir, not just
+      // ones inside our inputDir — an unrelated SVG elsewhere in the project (a
+      // hero image, a component's own asset) must not trigger this warning.
+      if (absPath === resolvedInputDir || absPath.startsWith(inputDirPrefix)) {
+        logger.warn(
+          `SVG changed outside known collections ("${relativePath}"). Restart the dev server to pick up new collections.`,
+        )
+      }
       return
     }
 

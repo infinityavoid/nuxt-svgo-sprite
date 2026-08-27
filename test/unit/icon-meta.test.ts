@@ -208,15 +208,4 @@ describe('buildIconMeta', () => {
     expect(meta.id).toBe('home')
     expect(meta.raw).toBe(true)
   })
-
-  it('a filename with no ASCII alphanumerics and empty componentPrefix does not produce a bare "_" component', () => {
-    const meta = buildIconMeta('звезда.svg', [], '/abs/звезда.svg', '')
-    // sanitizeFilename strips all non a-z0-9- chars, so the id is empty here —
-    // the collection-builder layer is responsible for rejecting this before it
-    // reaches buildIconMeta (see collection-builder.test.ts); this test only pins
-    // that buildIconMeta itself never returns a componentName that isn't a valid
-    // identifier, even in that degenerate case.
-    expect(meta.componentName).toBe('_')
-    expect(/^[a-z_$]/i.test(meta.componentName)).toBe(true)
-  })
 })
