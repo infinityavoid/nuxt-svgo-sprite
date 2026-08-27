@@ -1,6 +1,7 @@
 export interface CollectionIconDTO {
   id: string
-  componentName: string
+  /** Only present when createUseComponents is enabled — otherwise no such component exists. */
+  componentName?: string
 }
 
 export interface CollectionDTO {

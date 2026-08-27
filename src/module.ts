@@ -134,7 +134,7 @@ export default defineNuxtModule<ModuleOptions>({
 
     let broadcastRefresh: (() => Promise<void>) | undefined
     if (nuxt.options.dev) {
-      broadcastRefresh = setupDevtools(nuxt, collectionsRef, injectedCollectionNames)
+      broadcastRefresh = setupDevtools(nuxt, collectionsRef, injectedCollectionNames, options.createUseComponents!)
     }
 
     const cleanup = setupWatcher(

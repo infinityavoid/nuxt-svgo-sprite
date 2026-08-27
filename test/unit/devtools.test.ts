@@ -27,8 +27,8 @@ const collections: SpriteCollection[] = [defaultCol, adminCol]
 // ─── projectCollections ────────────────────────────────────────────────────────
 
 describe('projectCollections', () => {
-  it('projects each collection to a DTO with correct shape', () => {
-    const result = projectCollections(collections, new Set(['default']))
+  it('projects each collection to a DTO with correct shape (createUseComponents: true)', () => {
+    const result = projectCollections(collections, new Set(['default']), true)
     expect(result).toHaveLength(2)
 
     const def = result[0]!
@@ -45,18 +45,28 @@ describe('projectCollections', () => {
     expect(adm.icons[0]).toEqual({ id: 'admin-star', componentName: 'UseAdminStar' })
   })
 
+  it('omits componentName entirely when createUseComponents is false — no such component exists', () => {
+    const result = projectCollections(collections, new Set(['default']), false)
+    for (const col of result) {
+      for (const icon of col.icons) {
+        expect(icon).not.toHaveProperty('componentName')
+      }
+    }
+    expect(result[0]!.icons[0]).toEqual({ id: 'home' })
+  })
+
   it('marks injected correctly based on the set', () => {
-    const result = projectCollections(collections, new Set(['admin']))
+    const result = projectCollections(collections, new Set(['admin']), true)
     expect(result.find(c => c.name === 'admin')!.injected).toBe(true)
     expect(result.find(c => c.name === 'default')!.injected).toBe(false)
   })
 
   it('returns empty array for empty collections', () => {
-    expect(projectCollections([], new Set())).toEqual([])
+    expect(projectCollections([], new Set(), true)).toEqual([])
   })
 
   it('does not include absolutePath in the DTO', () => {
-    const result = projectCollections(collections, new Set())
+    const result = projectCollections(collections, new Set(), true)
     for (const col of result) {
       for (const icon of col.icons) {
         expect(icon).not.toHaveProperty('absolutePath')
