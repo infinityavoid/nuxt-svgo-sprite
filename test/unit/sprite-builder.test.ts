@@ -355,10 +355,33 @@ describe('prefixClassNames disabled', () => {
 })
 
 describe('script stripping', () => {
+  const SCRIPTY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" onload="alert(1)"><script>alert(2)</script><circle cx="12" cy="12" r="10"/></svg>'
+
   it('removes <script> elements and on* event handlers', async () => {
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" onload="alert(1)"><script>alert(2)</script><circle cx="12" cy="12" r="10"/></svg>'
-    const icon = await makeIconWithContent('scripty', svg)
+    const icon = await makeIconWithContent('scripty', SCRIPTY_SVG)
     const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).not.toContain('<script')
+    expect(sprite).not.toContain('onload')
+  })
+
+  it('still strips scripts for a .raw.svg icon (raw only skips optimization, not this invariant)', async () => {
+    const rawIcon: IconMeta = { ...(await makeIconWithContent('scripty-raw', SCRIPTY_SVG)), raw: true }
+    const sprite = await buildSprite([rawIcon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).not.toContain('<script')
+    expect(sprite).not.toContain('onload')
+  })
+
+  it('still strips scripts when optimizeFiles is false', async () => {
+    const icon = await makeIconWithContent('scripty-noopt', SCRIPTY_SVG)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, false, mockLogger)
+    expect(sprite).not.toContain('<script')
+    expect(sprite).not.toContain('onload')
+  })
+
+  it('still strips scripts when the user supplies their own svgoConfig', async () => {
+    const icon = await makeIconWithContent('scripty-custom', SCRIPTY_SVG)
+    const userConfig: Parameters<typeof buildSprite>[1] = { plugins: ['preset-default'] }
+    const sprite = await buildSprite([icon], userConfig, true, mockLogger)
     expect(sprite).not.toContain('<script')
     expect(sprite).not.toContain('onload')
   })

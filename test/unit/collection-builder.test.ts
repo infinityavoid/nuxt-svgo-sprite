@@ -2,7 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { buildCollectionsFromDir } from '../../src/builders/collection-builder'
+import { buildCollectionsFromDir, rebuildSingleCollection } from '../../src/builders/collection-builder'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>'
 
@@ -211,5 +211,71 @@ describe('buildCollectionsFromDir', () => {
     const allIds = cols.flatMap(c => c.icons.map(i => i.id))
     expect(allIds.filter(id => id === 'admin-star')).toHaveLength(1)
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Symbol id collision'))
+  })
+})
+
+describe('rebuildSingleCollection', () => {
+  it('reflects an added file the same way a cold build would', async () => {
+    await writeSvg('admin', 'star.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const adminCol = cold.find(c => c.name === 'admin')!
+
+    await writeSvg('admin', 'close.svg')
+    const updated = await rebuildSingleCollection(adminCol, 'Use', mockLogger)
+
+    expect(updated.icons.map(i => i.id).sort()).toEqual(['admin-close', 'admin-star'])
+  })
+
+  it('reflects a removed file the same way a cold build would', async () => {
+    await writeSvg('admin', 'star.svg')
+    const starPath = await writeSvg('admin', 'close.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const adminCol = cold.find(c => c.name === 'admin')!
+
+    await fsp.rm(starPath)
+    const updated = await rebuildSingleCollection(adminCol, 'Use', mockLogger)
+
+    expect(updated.icons.map(i => i.id)).toEqual(['admin-star'])
+  })
+
+  it('a subfolder literally named "default" inside a named collection is NOT reinterpreted as that collection\'s merge folder on rebuild', async () => {
+    // Regression: rebuildSingleCollection used to reuse walkInputDir's root-relative
+    // "default/ merges into default" rule against an arbitrary collection subtree,
+    // misclassifying admin/default/x.svg as a direct file of "admin" after a rebuild
+    // even though a cold build assigns it to the separate "adminDefault" collection.
+    await writeSvg('admin', 'star.svg')
+    await writeSvg('admin', 'default', 'extra.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    const coldAdmin = cold.find(c => c.name === 'admin')!
+    const coldAdminDefault = cold.find(c => c.name === 'adminDefault')!
+    expect(coldAdmin.icons.map(i => i.id)).toEqual(['admin-star'])
+    expect(coldAdminDefault.icons.map(i => i.id)).toEqual(['admin-default-extra'])
+
+    // Touch a file in admin/ to trigger a rebuild of just that collection.
+    const rebuiltAdmin = await rebuildSingleCollection(coldAdmin, 'Use', mockLogger)
+    expect(rebuiltAdmin.icons.map(i => i.id)).toEqual(['admin-star'])
+  })
+
+  it('the default collection still merges inputDir/default/ files on rebuild', async () => {
+    await writeSvg('home.svg')
+    await writeSvg('default', 'extra.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+    expect(defaultCol.icons.map(i => i.id).sort()).toEqual(['extra', 'home'])
+
+    await writeSvg('another.svg')
+    const updated = await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+    expect(updated.icons.map(i => i.id).sort()).toEqual(['another', 'extra', 'home'])
+  })
+
+  it('does not warn when the optional inputDir/default/ merge folder does not exist', async () => {
+    await writeSvg('home.svg')
+    const cold = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+    vi.clearAllMocks()
+
+    await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+    expect(mockLogger.warn).not.toHaveBeenCalled()
   })
 })

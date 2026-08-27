@@ -33,14 +33,14 @@ export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Pro
     return []
   }
 
-  const files = await glob(['**/*.svg'], {
+  const files = (await glob(['**/*.svg'], {
     cwd: inputDir,
     onlyFiles: true,
     absolute: true,
     followSymbolicLinks: false,
     caseSensitiveMatch: false,
     ignore: IGNORE_DIRS,
-  })
+  })).sort() // deterministic symbol/collection order across platforms and filesystems
 
   const result = new Map<string, WalkerEntry>()
 
@@ -72,4 +72,31 @@ export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Pro
   }
 
   return Array.from(result.values())
+}
+
+/**
+ * Reads the .svg files directly inside `dir` (no recursion into subfolders).
+ * Used by the HMR rebuild path, which only ever wants one collection's own direct
+ * files — walkInputDir's recursive glob plus its `default/`-prefix-stripping rule is
+ * only meaningful relative to the true `inputDir` root; reusing it against an
+ * arbitrary collection subtree misclassifies a nested folder that happens to be
+ * named "default" (see collection-builder.ts's rebuildSingleCollection).
+ * Missing directory → empty array, matching walkInputDir's behavior.
+ */
+export async function readDirectSvgFiles(dir: string, logger?: WalkerLogger): Promise<string[]> {
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true })
+  }
+  catch (err: unknown) {
+    logger?.warn(`Cannot read directory "${dir}": ${(err as Error).message}`)
+    return []
+  }
+
+  return entries
+    // isFile() is false for symlinks (readdir with withFileTypes doesn't follow them),
+    // matching walkInputDir's followSymbolicLinks: false.
+    .filter(e => e.isFile() && /\.svg$/i.test(e.name))
+    .map(e => path.normalize(path.join(dir, e.name)))
+    .sort()
 }

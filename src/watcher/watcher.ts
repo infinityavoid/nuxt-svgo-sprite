@@ -96,9 +96,16 @@ export function setupWatcher(
   )
 
   nuxt.hook('builder:watch', async (event, relativePath) => {
-    if (!relativePath.endsWith('.svg')) return
+    if (!/\.svg$/i.test(relativePath)) return
 
-    const absPath = path.resolve(nuxt.options.rootDir, relativePath)
+    // `relativePath` is already absolute on recent Nuxt (path.resolve is then a
+    // no-op), but on Nuxt versions where builder:watch reports a path relative to
+    // srcDir rather than rootDir, resolving against rootDir alone silently finds no
+    // owning collection whenever srcDir !== rootDir. Try both before giving up.
+    const fromRoot = path.resolve(nuxt.options.rootDir, relativePath)
+    const absPath = findOwningCollection(fromRoot, collectionsRef.current)
+      ? fromRoot
+      : path.resolve(nuxt.options.srcDir, relativePath)
     const collection = findOwningCollection(absPath, collectionsRef.current)
     if (!collection) {
       logger.warn(

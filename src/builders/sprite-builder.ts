@@ -65,9 +65,6 @@ export const defaultSvgoConfig: SvgoConfig = {
     { name: 'removeAttrs', params: { attrs: ['svg:id'] } },
     { name: 'removeDimensions' },
     { name: 'removeXMLNS' },
-    // Icon SVGs are inlined into every SSR page; strip any embedded <script>/event
-    // handlers rather than trusting an arbitrary icon-pack download.
-    { name: 'removeScripts' },
   ] as SvgoConfig['plugins'],
 }
 
@@ -232,6 +229,11 @@ function buildIconConfig(
       // sprite pipeline itself depends on (edge cases 2, 6, 10, 12).
       { name: 'removeXMLProcInst' },
       { name: 'removeDoctype' },
+      // Icon SVGs are inlined into every SSR page; strip embedded <script>/event
+      // handlers unconditionally — this must NOT be skippable via optimizeFiles:
+      // false, .raw.svg, or a user-supplied svgoConfig (which replaces the
+      // optimization list above, not this structural block).
+      { name: 'removeScripts' },
       makeInlineDefsPlugin(),
       { name: 'prefixIds', params: { prefix: iconIdPrefix(spriteName, icon.id), delim: '', prefixIds: true, prefixClassNames: false } },
       makeConvertToSymbolPlugin(icon.id),
@@ -292,15 +294,21 @@ export async function buildSprite(
 
   const symbols: string[] = []
 
-  for (const icon of icons) {
-    let raw: string
+  // Read every icon file concurrently (I/O-bound, independent of each other) instead
+  // of one at a time — Promise.all preserves array order regardless of completion
+  // order, so the rest of the per-icon processing below stays sequential/ordered.
+  const reads = await Promise.all(icons.map(async (icon) => {
     try {
-      raw = await fsp.readFile(icon.absolutePath, 'utf-8')
+      return { icon, raw: await fsp.readFile(icon.absolutePath, 'utf-8') }
     }
     catch (err) {
       logger.error(`Failed to read "${icon.absolutePath}": ${String(err)} — skipping.`)
-      continue
+      return { icon, raw: null as string | null }
     }
+  }))
+
+  for (const { icon, raw } of reads) {
+    if (raw === null) continue
 
     if (raw.trim() === '') {
       logger.error(`"${icon.absolutePath}" is empty — skipping.`)

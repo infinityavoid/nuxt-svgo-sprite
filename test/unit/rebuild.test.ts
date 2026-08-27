@@ -143,10 +143,10 @@ describe('createRebuildHandler', () => {
     expect(registerUseComponent).toHaveBeenCalledWith(newIcon)
   })
 
-  it('on change, does not register Use component even with createUseComponents: true', async () => {
-    const updatedCol = makeCollection('default', '/icons', [
-      { id: 'home', componentName: 'UseHome', absolutePath: '/icons/home.svg' },
-    ]);
+  it('does not register a Use component for an icon that already existed before this rebuild', async () => {
+    const existingIcon = { id: 'home', componentName: 'UseHome', absolutePath: '/icons/home.svg' }
+    const preRebuildCol = makeCollection('default', '/icons', [existingIcon])
+    const updatedCol = makeCollection('default', '/icons', [existingIcon]);
     (rebuildSingleCollection as ReturnType<typeof vi.fn>).mockResolvedValue(updatedCol)
 
     const ctx = makeCtx({
@@ -159,9 +159,37 @@ describe('createRebuildHandler', () => {
       },
     })
     const handler = createRebuildHandler(ctx)
-    await handler(makeCollection('default', '/icons'), 'change', '/icons/home.svg')
+    await handler(preRebuildCol, 'change', '/icons/home.svg')
 
     expect(registerUseComponent).not.toHaveBeenCalled()
+  })
+
+  it('registers a Use component for every new icon in one rebuild, not just the one from the triggering event', async () => {
+    // Simulates several files being added at once, coalesced by the watcher's
+    // debounce into a single rebuild firing with only the last event's absPath.
+    const preRebuildCol = makeCollection('default', '/icons')
+    const iconA = { id: 'alpha', componentName: 'UseAlpha', absolutePath: '/icons/alpha.svg' }
+    const iconB = { id: 'beta', componentName: 'UseBeta', absolutePath: '/icons/beta.svg' }
+    const updatedCol = makeCollection('default', '/icons', [iconA, iconB]);
+    (rebuildSingleCollection as ReturnType<typeof vi.fn>).mockResolvedValue(updatedCol)
+
+    const ctx = makeCtx({
+      options: {
+        componentPrefix: 'Use',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        svgoConfig: {} as any,
+        optimizeFiles: true,
+        createUseComponents: true,
+      },
+    })
+    const handler = createRebuildHandler(ctx)
+    // Only iconB's path is passed as absPath — the debounced trailing call's arg —
+    // yet iconA must also get registered.
+    await handler(preRebuildCol, 'add', '/icons/beta.svg')
+
+    expect(registerUseComponent).toHaveBeenCalledTimes(2)
+    expect(registerUseComponent).toHaveBeenCalledWith(iconA)
+    expect(registerUseComponent).toHaveBeenCalledWith(iconB)
   })
 
   it('calls broadcastRefresh when provided', async () => {

@@ -141,10 +141,10 @@ describe('handleWatchEvent', () => {
 describe('setupWatcher', () => {
   type MockNuxt = Nuxt & { triggerWatch: (event: string, relativePath: string) => Promise<void> }
 
-  function makeMockNuxt(rootDir: string): MockNuxt {
+  function makeMockNuxt(rootDir: string, srcDir: string = rootDir): MockNuxt {
     const hookHandlers: Record<string, (event: string, relativePath: string) => Promise<void>> = {}
     return {
-      options: { rootDir },
+      options: { rootDir, srcDir },
       hook: vi.fn((name: string, handler: (event: string, relativePath: string) => Promise<void>) => {
         hookHandlers[name] = handler
       }),
@@ -189,6 +189,33 @@ describe('setupWatcher', () => {
 
     await nuxt.triggerWatch('change', 'assets/icons/readme.md')
     expect(onChange).not.toHaveBeenCalled()
+    expect(mockLogger.warn).not.toHaveBeenCalled()
+  })
+
+  it('routes an uppercase .SVG file change the same as a lowercase one', async () => {
+    const rootDir = iconRoot
+    const nuxt = makeMockNuxt(rootDir)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, { current: collections }, mockLogger, onChange)
+
+    await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'HOME.SVG')))
+    await new Promise(r => setTimeout(r, 150))
+    expect(onChange).toHaveBeenCalledOnce()
+  })
+
+  it('falls back to resolving against srcDir when rootDir resolution finds no owning collection', async () => {
+    // Simulates a Nuxt version where builder:watch reports a path relative to srcDir
+    // rather than rootDir, whenever the two differ.
+    const wrongRoot = path.join(os.tmpdir(), 'watcher-test-wrong-root')
+    const nuxt = makeMockNuxt(wrongRoot, iconRoot)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, { current: collections }, mockLogger, onChange)
+
+    const relPath = path.relative(iconRoot, path.join(iconRoot, 'admin', 'star.svg'))
+    await nuxt.triggerWatch('change', relPath)
+    await new Promise(r => setTimeout(r, 150))
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange.mock.calls[0]![0].name).toBe('admin')
     expect(mockLogger.warn).not.toHaveBeenCalled()
   })
 

@@ -88,9 +88,17 @@ export function createRebuildHandler(ctx: RebuildContext) {
           || (updateInject === true && t.filename === ctx.injectTemplateName),
       })
 
-      if (event === 'add' && ctx.options.createUseComponents) {
-        const newIcon = updatedCol.icons.find(i => i.absolutePath === absPath)
-        if (newIcon) {
+      if (ctx.options.createUseComponents) {
+        // Diff against the collection's icon list from BEFORE this rebuild, rather
+        // than trusting `event`/`absPath` alone — the debounced handler only ever
+        // fires with the LAST raw fs event's arguments, so dropping several new
+        // files into a folder at once (or an 'add' immediately followed by a
+        // 'change') can coalesce into one firing whose event/absPath describe only
+        // one of the changes. Registering every icon that's newly present catches
+        // all of them regardless of what triggered this particular rebuild.
+        const previousPaths = new Set(collection.icons.map(i => i.absolutePath))
+        for (const newIcon of updatedCol.icons) {
+          if (previousPaths.has(newIcon.absolutePath)) continue
           registerUseComponent(newIcon)
           ctx.logger.info(`Registered new component <${newIcon.componentName} />.`)
         }

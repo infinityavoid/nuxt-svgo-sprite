@@ -139,11 +139,17 @@ function clientHtml(): string {
 
     function esc(s) {
       // componentPrefix (and therefore componentName) comes from the user's own
-      // nuxt.config, not external input, but escaping it before it lands in
-      // innerHTML costs nothing and closes the self-inflicted injection path.
-      var div = document.createElement('div');
-      div.textContent = String(s);
-      return div.innerHTML;
+      // nuxt.config, not external input, but escaping it before it lands in HTML
+      // attribute values (title="...", alt="...") costs nothing and closes the
+      // self-inflicted injection path. Quotes must be escaped explicitly — a
+      // textContent/innerHTML round-trip does NOT escape " or ', which would break
+      // out of a double-quoted attribute.
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     function render(collections) {

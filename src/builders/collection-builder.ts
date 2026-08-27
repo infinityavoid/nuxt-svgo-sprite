@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { walkInputDir } from '../utils/fs'
+import { walkInputDir, readDirectSvgFiles } from '../utils/fs'
 import {
   buildIconMeta,
   deriveCollectionName,
@@ -187,15 +187,27 @@ export async function buildCollectionsFromDir(
  * Used by the watcher rebuild path to avoid re-scanning the entire inputDir tree.
  * Cross-collection id uniqueness (global pass 2 above) is re-checked by the caller
  * against the other live collections — this function only re-derives the local set.
+ *
+ * Reads `collection.inputDir` directly (one level, no recursion) rather than reusing
+ * `walkInputDir` — that walker's `default/`-prefix-stripping rule is only correct
+ * relative to the TRUE inputDir root; applying it to an arbitrary collection subtree
+ * would misclassify a nested folder that happens to be named "default" (e.g.
+ * `<inputDir>/admin/default/x.svg` rescanned from `admin/` would wrongly look like a
+ * direct file of `admin` instead of the separate `adminDefault` collection a cold
+ * build assigns it to).
  */
 export async function rebuildSingleCollection(
   collection: SpriteCollection,
   componentPrefix: string,
   logger: CollectionLogger,
 ): Promise<SpriteCollection> {
-  const entries = await walkInputDir(collection.inputDir, logger)
-  const direct = entries.find(e => e.segments.length === 0)
-  const files = direct?.files ?? []
+  const direct = await readDirectSvgFiles(collection.inputDir, logger)
+  // The default collection also merges direct files from an inputDir/default/
+  // subfolder (see utils/fs.ts's walkInputDir merge rule) — mirror that here. No
+  // logger passed: that subfolder not existing is the normal case, not a warning.
+  const files = collection.segments.length === 0
+    ? [...direct, ...(await readDirectSvgFiles(path.join(collection.inputDir, 'default')))].sort()
+    : direct
 
   const icons = processFiles(files, collection.segments, collection.name, componentPrefix, logger)
 
