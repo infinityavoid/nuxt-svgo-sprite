@@ -1,6 +1,6 @@
 {
   "name": "nuxt-svgo-sprite",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Nuxt module for generating an inline SVG sprite with SVGO optimization (SSR-friendly)",
   "repository": "infinityavoid/nuxt-svgo-sprite",
   "license": "MIT",
@@ -30,7 +30,7 @@
     "dev": "npm run dev:prepare && nuxt dev playground",
     "dev:build": "nuxt build playground",
     "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt prepare playground",
-    "release": "npm run lint && npm run test && npm run prepack && changelogen --release && npm publish && git push --follow-tags",
+    "release": "npm run lint && npm run test && npm run dev:prepare && npm run test:types && npm run prepack && changelogen --release && npm publish && git push --follow-tags",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest watch",
