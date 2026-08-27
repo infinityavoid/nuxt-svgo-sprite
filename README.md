@@ -4,15 +4,19 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt module that generates an inline SVG sprite (SSR-friendly) and typed icon usage.
+Nuxt 3 module that auto-discovers SVG collections from your folder structure, generates one inline SSR sprite per collection, and provides typed icon references.
 
 ## Features
 
-- Inline SSR sprite via `<SvgSprite />`
-- Icon usage via `<SvgUse name="..." />`
-- Built-in optimization through `svg-sprite` + SVGO transform
-- Optional per-icon wrappers (`<UseCheck />`, `<IconStar />`, etc.)
-- Auto-generated icon name type for `SvgUse` (`#build/nuxt-svgo-sprite/icon-names`)
+- **Folder-based collections** — subfolders under `inputDir` become named collections automatically; no extra config needed
+- **Per-collection sprite components** — `<DefaultSprite />`, `<AdminSprite />`, etc.
+- **Universal `<SvgUse>` component** — reference any icon across all collections by name
+- **`autoInjectSprite`** — optionally inject sprites into every SSR page without touching your templates
+- **Typed icon names** — `DefaultIconName`, `AdminIconName`, `AllIconName` — generated from actual `.svg` filenames
+- **SVGO v4 optimization** built in — direct pipeline, no extra dependencies
+- **HMR support** — dev server rebuilds sprites on file add/change/remove
+- **Optional per-icon wrapper components** — `<UseHome />`, `<IconAdminUser />`, etc.
+- **SSR-friendly** — sprites are inlined into the HTML, no layout shift
 - Nuxt 3 / Nuxt 4 compatible
 
 ## Install
@@ -21,83 +25,244 @@ Nuxt module that generates an inline SVG sprite (SSR-friendly) and typed icon us
 npm install nuxt-svgo-sprite
 ```
 
-## Setup
+## Quick start
 
 ```ts
+// nuxt.config.ts
 export default defineNuxtConfig({
   modules: ['nuxt-svgo-sprite'],
-  svgoSprite: {
-    inputDir: './assets/icons',
-  },
 })
 ```
 
-Add icons:
+Place your SVG icons under `assets/icons/`:
 
-```text
-assets/icons/check.svg
-assets/icons/star.svg
+```
+assets/icons/
+  home.svg
+  star.svg
+  admin/
+    user.svg
+    shield.svg
 ```
 
-Use in app/layout:
+Use in your app:
 
 ```vue
+<!-- app.vue -->
 <template>
-  <SvgSprite />
-  <SvgUse name="check" width="24" height="24" />
+  <!-- Place once — in app.vue or a shared layout -->
+  <DefaultSprite />
+  <AdminSprite />
+
+  <SvgUse name="home" width="24" height="24" />
+  <SvgUse name="star" width="24" height="24" />
+  <SvgUse name="admin-user" width="24" height="24" />
+  <SvgUse name="admin-shield" width="24" height="24" />
 </template>
 ```
+
+## Folder structure → collections
+
+Every folder under `inputDir` becomes a **collection** automatically:
+
+```
+assets/icons/
+  home.svg           → default collection  →  id="home"
+  star.svg           → default collection  →  id="star"
+  default/
+    extra.svg        → default collection  →  id="extra"   (merged into default)
+  admin/
+    user.svg         → admin collection    →  id="admin-user"
+    shield.svg       → admin collection    →  id="admin-shield"
+  payments/
+    card.svg         → payments collection →  id="payments-card"
+```
+
+Root-level files and the optional `default/` subfolder both belong to the **default** collection.
+
+Each discovered collection gets:
+- **Sprite component** — `<DefaultSprite />`, `<AdminSprite />`, `<PaymentsSprite />`
+- **TypeScript type** — `DefaultIconName`, `AdminIconName`, `PaymentsIconName`
+
+## Components
+
+### Sprite components
+
+Each collection generates a component named `{Collection}Sprite`:
+
+```vue
+<DefaultSprite />   <!-- inlines symbols: home, star -->
+<AdminSprite />     <!-- inlines symbols: admin-user, admin-shield -->
+```
+
+Place them once per page or in a shared layout. They are visually hidden (via inline `style`) and make their symbols available to every `<SvgUse>` on the same page.
+
+If you prefer not to place these manually, use [`autoInjectSprite`](#autoinjectsprite).
+
+### `<SvgUse>`
+
+References any icon by id across all collections:
+
+```vue
+<!-- static name -->
+<SvgUse name="home" width="24" height="24" />
+<SvgUse name="admin-user" width="24" height="24" stroke="currentColor" />
+
+<!-- dynamic name — works at runtime; TypeScript still checks AllIconName -->
+<SvgUse :name="currentIcon" width="24" height="24" />
+```
+
+All standard SVG attributes are forwarded to the inner `<svg>` element. The `name` prop is typed as `AllIconName` (union of all collection types) — IDE autocomplete and typo detection work out of the box.
+
+> **Mount order:** the sprite component (`<DefaultSprite />`, `<AdminSprite />`, etc.) must appear in the DOM **before** any `<SvgUse>` that references its symbols. Place sprite components in a shared layout or at the top of the page template. If you use `autoInjectSprite`, this is handled automatically.
+
+### Per-icon wrapper components
+
+Enable `createUseComponents` to generate a thin wrapper component per icon:
+
+```ts
+svgoSprite: {
+  createUseComponents: true,
+  componentPrefix: 'Icon',   // default: 'Use'
+}
+```
+
+```vue
+<IconHome width="24" height="24" />
+<IconAdminUser width="24" height="24" stroke="currentColor" />
+```
+
+Component names follow the pattern `{prefix}{PascalCase(id)}`:
+
+| File | id | Component |
+|---|---|---|
+| `home.svg` | `home` | `<IconHome />` |
+| `arrow-right.svg` | `arrow-right` | `<IconArrowRight />` |
+| `admin/user.svg` | `admin-user` | `<IconAdminUser />` |
+| `admin/shield.svg` | `admin-shield` | `<IconAdminShield />` |
+
+Components are auto-imported and accept all standard SVG attributes.
+
+## `autoInjectSprite`
+
+By default (`autoInjectSprite: false`) you place sprite components manually. Set `autoInjectSprite` to inject them via a Nitro server plugin instead:
+
+```ts
+svgoSprite: {
+  // Inject all collection sprites into every SSR page:
+  autoInjectSprite: true,
+
+  // Or inject only specific collections:
+  autoInjectSprite: ['admin', 'payments'],
+}
+```
+
+Sprites are injected before `#__nuxt` in the rendered HTML, outside Vue's hydration scope — no hydration mismatch, and they persist across SPA navigation without any client-side work.
+
+When `autoInjectSprite: false` (the default), a dev-mode notice lists the sprite component names you need to add.
+
+## SVGO opt-out per icon
+
+Rename any icon file to `*.raw.svg` to include it in the sprite **without SVGO optimization**. This is useful for icons that rely on features SVGO's default preset removes (XML comments, certain attributes, animation data):
+
+```
+assets/icons/
+  home.svg          ← optimized normally
+  logo.raw.svg      ← included as-is, SVGO skipped
+```
+
+The generated id and component name are the same as for a regular `.svg` file — the `.raw` suffix is transparent to consumers:
+
+```vue
+<SvgUse name="logo" width="64" height="64" />
+```
+
+## Styling icons
+
+Generated components emit a plain `<svg>` with no injected classes, inline styles, or wrapper elements. Size and color are controlled entirely by the consumer:
+
+```vue
+<!-- via HTML attributes -->
+<SvgUse name="home" width="24" height="24" stroke="currentColor" />
+
+<!-- via CSS -->
+<SvgUse name="home" class="icon icon--lg" />
+```
+
+```css
+.icon        { width: 1.5rem; height: 1.5rem; }
+.icon--lg    { width: 2rem; height: 2rem; }
+```
+
+All standard SVG presentation attributes (`fill`, `stroke`, `stroke-width`, `color`, etc.) are forwarded directly to the inner `<svg>` element via Vue's `v-bind="$attrs"`.
+
+## TypeScript types
+
+The module generates `#build/nuxt-svgo-sprite/icon-names.d.ts` and registers it in your Nuxt `tsconfig` automatically (via `prepare:types`). No imports needed:
+
+```ts
+// Generated from your actual .svg files:
+export type DefaultIconName = 'home' | 'star'
+export type AdminIconName   = 'admin-user' | 'admin-shield'
+export type AllIconName     = DefaultIconName | AdminIconName
+```
+
+`SvgUse`'s `name` prop is typed as `AllIconName`, so your IDE flags unknown icon names at development time.
 
 ## Configuration
 
 ```ts
 export default defineNuxtConfig({
   svgoSprite: {
-    inputDir: './assets/icons',
+    inputDir: '~/assets/icons',
     optimizeFiles: true,
     createUseComponents: false,
-    componentPrefix: 'use',
-    spriteOptions: {},
+    componentPrefix: 'Use',
+    autoInjectSprite: false,
+    svgoConfig: {},
   },
 })
 ```
 
-| Option | Type | Default |
-|---|---|---|
-| `inputDir` | `string` | `'./assets/icons'` |
-| `optimizeFiles` | `boolean` | `true` |
-| `createUseComponents` | `boolean` | `false` |
-| `componentPrefix` | `string` | `'use'` |
-| `spriteOptions` | `SpriteConfig` | internal defaults |
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `inputDir` | `string` | `'~/assets/icons'` | Root folder scanned for SVG files. `~` aliases are supported. |
+| `optimizeFiles` | `boolean` | `true` | Pass each SVG through SVGO before adding it to the sprite. Set `false` to skip optimization globally. |
+| `createUseComponents` | `boolean` | `false` | Generate a wrapper component per icon. |
+| `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
+| `autoInjectSprite` | `boolean \| string[]` | `false` | Inject sprite(s) into every SSR page automatically. |
+| `svgoConfig` | `SvgoConfig` | internal defaults | Deep-merged over the built-in SVGO configuration. See [SVGO docs](https://svgo.dev) for available plugins. |
 
-Notes:
-- `inputDir` is resolved via Nuxt's `resolvePath`, so `~` aliases work: `'~/assets/icons'`.
-- `optimizeFiles: false` disables SVGO sprite transforms.
-- `spriteOptions` is deep-merged over the built-in `svg-sprite` defaults, so partial configs are safe.
+## Migrating from v2
 
-## Typed `SvgUse.name`
+| v2 | v3 |
+|---|---|
+| `<SvgSprite />` | `<DefaultSprite />` (named collections: `<AdminSprite />`, etc.) |
+| `SvgIconName` | `DefaultIconName` (or `AllIconName` to cover all collections) |
+| `componentPrefix: 'use'` | `componentPrefix: 'Use'` (capital U is the new default) |
+| `spriteOptions: SpriteConfig` | `svgoConfig: SvgoConfig` — direct SVGO config, no svg-sprite wrapper |
+| `optimizeFiles: false` | Unchanged — still disables SVGO optimization globally |
+| Root-level `*.svg` files | Unchanged — still the default collection |
+| No subfolder support | Subfolders auto-create named collections |
+| `icon.svg` → id `"icon"` | Root files unchanged; `admin/icon.svg` → id `"admin-icon"` |
 
-During build/dev, the module generates:
+There is no `collections: Record<string, string>` config key. Collections are discovered from the folder structure automatically.
 
-- `#build/nuxt-svgo-sprite/icon-names.d.ts`
-- a generated `SvgUse` component in Nuxt build templates (`.nuxt`)
-
-`SvgUse` imports `SvgIconName` from this file, so IDE autocomplete is based on actual `.svg` filenames.
-
-## Per-icon wrappers
-
-Enable:
+**`spriteOptions` migration:** the `spriteOptions` key no longer exists (v3 removes `svg-sprite`). If you passed custom SVGO plugins via `spriteOptions.shape.transform`, move them directly to `svgoConfig.plugins`:
 
 ```ts
-svgoSprite: {
-  createUseComponents: true,
-  componentPrefix: 'Icon',
+// v2
+spriteOptions: {
+  shape: { transform: [{ svgo: { plugins: [{ name: 'removeViewBox', active: false }] } }] }
+}
+
+// v3
+svgoConfig: {
+  plugins: [{ name: 'preset-default', params: { overrides: { removeViewBox: false } } }]
 }
 ```
 
-Then `arrow-right.svg` becomes `<IconArrowRight />`.
-
-Generated wrapper components are also emitted as Nuxt templates (`.nuxt`) and render a plain `<svg><use ... /></svg>` for each icon.
+svg-sprite-specific keys (`mode`, `svg.rootAttributes`, `shape.*`) have no v3 equivalent — these are handled internally.
 
 ## Development
 

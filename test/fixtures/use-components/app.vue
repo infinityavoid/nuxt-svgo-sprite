@@ -1,5 +1,5 @@
 <template>
-  <SvgSprite />
+  <DefaultSprite />
   <div>
     <UseCheck
       width="16"

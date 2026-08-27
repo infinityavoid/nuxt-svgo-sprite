@@ -4,9 +4,11 @@ export default defineNuxtConfig({
   compatibilityDate: 'latest',
 
   svgoSprite: {
-    inputDir: './assets/icons',
+    inputDir: '~/assets/icons',
     createUseComponents: true,
     componentPrefix: 'Icon',
     optimizeFiles: true,
+    // autoInjectSprite: true  ← uncomment to skip manual <DefaultSprite /> / <AdminSprite />
+    // svgoConfig: { plugins: [{ name: 'preset-default', params: { overrides: { removeViewBox: false } } }] }
   },
 })
