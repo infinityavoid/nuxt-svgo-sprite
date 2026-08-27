@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { projectCollections, resolveIconPreviewPath } from '../../src/devtools/devtools'
+import os from 'node:os'
+import path from 'node:path'
+import { promises as fsp } from 'node:fs'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { projectCollections, resolveIconPreviewPath, createDevtoolsMiddleware } from '../../src/devtools/devtools'
 import type { SpriteCollection } from '../../src/types/types'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 
 function makeCollection(name: string, icons: { id: string, componentName: string, absolutePath: string }[]): SpriteCollection {
   return {
@@ -87,5 +91,98 @@ describe('resolveIconPreviewPath', () => {
 
   it('returns null for empty collection list', () => {
     expect(resolveIconPreviewPath('default', 'home', [])).toBe(null)
+  })
+})
+
+// ─── createDevtoolsMiddleware ─────────────────────────────────────────────────
+
+describe('createDevtoolsMiddleware', () => {
+  let tmpDir: string
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'svgo-sprite-devtools-mw-test-'))
+  })
+
+  afterEach(async () => {
+    await fsp.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  function makeReqRes(url: string) {
+    const headers: Record<string, string> = {}
+    const req = { url } as IncomingMessage
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn((name: string, value: string) => { headers[name] = value }),
+      end: vi.fn(),
+    } as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> }
+    return { req, res, headers }
+  }
+
+  async function flush() {
+    await new Promise(r => setTimeout(r, 50))
+  }
+
+  it('serves the client HTML shell at "/"', async () => {
+    const { req, res, headers } = makeReqRes('/')
+    createDevtoolsMiddleware({ current: [] })(req, res)
+    await flush()
+    expect(headers['Content-Type']).toContain('text/html')
+    expect(res.end.mock.calls[0]?.[0]).toContain('<!DOCTYPE html>')
+  })
+
+  it('serves the client HTML shell at "" (empty url)', async () => {
+    const { req, res, headers } = makeReqRes('')
+    createDevtoolsMiddleware({ current: [] })(req, res)
+    await flush()
+    expect(headers['Content-Type']).toContain('text/html')
+  })
+
+  it('serves a known icon\'s raw SVG content with no-cache', async () => {
+    const filePath = path.join(tmpDir, 'home.svg')
+    await fsp.writeFile(filePath, '<svg viewBox="0 0 24 24"></svg>', 'utf-8')
+    const collections: SpriteCollection[] = [{
+      name: 'default',
+      segments: [],
+      inputDir: tmpDir,
+      spriteComponentName: 'DefaultSprite',
+      typeName: 'DefaultIconName',
+      icons: [{ id: 'home', componentName: 'UseHome', absolutePath: filePath }],
+    }]
+    const { req, res, headers } = makeReqRes('/svg/default/home')
+    createDevtoolsMiddleware({ current: collections })(req, res)
+    await flush()
+    expect(headers['Content-Type']).toContain('image/svg+xml')
+    expect(headers['Cache-Control']).toBe('no-cache')
+    expect(res.end.mock.calls[0]?.[0]).toContain('<svg')
+  })
+
+  it('ignores a query string when matching the /svg/ route', async () => {
+    const filePath = path.join(tmpDir, 'home.svg')
+    await fsp.writeFile(filePath, '<svg viewBox="0 0 24 24"></svg>', 'utf-8')
+    const collections: SpriteCollection[] = [{
+      name: 'default',
+      segments: [],
+      inputDir: tmpDir,
+      spriteComponentName: 'DefaultSprite',
+      typeName: 'DefaultIconName',
+      icons: [{ id: 'home', componentName: 'UseHome', absolutePath: filePath }],
+    }]
+    const { req, res } = makeReqRes('/svg/default/home?cachebust=123')
+    createDevtoolsMiddleware({ current: collections })(req, res)
+    await flush()
+    expect(res.end.mock.calls[0]?.[0]).toContain('<svg')
+  })
+
+  it('returns 404 for an unknown icon id', async () => {
+    const { req, res } = makeReqRes('/svg/default/nonexistent')
+    createDevtoolsMiddleware({ current: [] })(req, res)
+    await flush()
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('returns 404 for a completely unknown route', () => {
+    const { req, res } = makeReqRes('/not-a-real-route')
+    createDevtoolsMiddleware({ current: [] })(req, res)
+    expect(res.statusCode).toBe(404)
   })
 })

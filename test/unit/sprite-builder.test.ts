@@ -194,7 +194,7 @@ describe('raw opt-out', () => {
 // ─── Edge case 13: inlineDefs ─────────────────────────────────────────────────
 
 describe('inlineDefs — <use>/<defs> resolution', () => {
-  it('an icon with an internal gradient referenced via <use> renders in the sprite', async () => {
+  it('an icon with an internal gradient renders in the sprite (gradient stays valid via url())', async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
       + '<defs><linearGradient id="grad"><stop offset="0%" stop-color="red"/><stop offset="100%" stop-color="blue"/></linearGradient></defs>'
       + '<rect fill="url(#grad)" width="24" height="24"/></svg>'
@@ -202,6 +202,20 @@ describe('inlineDefs — <use>/<defs> resolution', () => {
     const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
     expect(sprite).toContain('id="gradient-icon"')
     expect(mockLogger.error).not.toHaveBeenCalled()
+  })
+
+  it('actually inlines a <use> reference to a <defs> element, not just avoids erroring', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+      + '<defs><path id="p" d="M2 2h20v20H2z"/></defs>'
+      + '<use href="#p" x="1" y="1"/></svg>'
+    const icon = await makeIconWithContent('use-icon', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    // The <use> and the now-empty <defs> are both gone — the path itself, wrapped in
+    // a translate <g>, is what's actually left in the document.
+    expect(sprite).not.toContain('<use')
+    expect(sprite).not.toContain('<defs')
+    expect(sprite).toContain('M2 2h20v20H2z')
+    expect(sprite).toContain('translate(1,1)')
   })
 
   it('two icons with matching internal ids do not cross-reference after merge', async () => {
@@ -231,6 +245,20 @@ describe('inlineStyles — <style> block handling', () => {
     const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
     expect(sprite).toContain('id="styled-icon"')
     expect(mockLogger.error).not.toHaveBeenCalled()
+  })
+
+  it('actually inlines the <style> rule onto the matched element, not just avoids erroring', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+      + '<style>.a{fill:red}</style>'
+      + '<circle class="a" cx="12" cy="12" r="10"/></svg>'
+    const icon = await makeIconWithContent('styled-icon-2', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    // The <style> block (and the class that only existed to be targeted by it) must
+    // be gone — leaking it into the shared sprite document would apply ".a{fill:red}"
+    // to every symbol with an element carrying class="a", not just this one.
+    expect(sprite).not.toContain('<style')
+    expect(sprite).not.toContain('class="a"')
+    expect(sprite).toMatch(/style="[^"]*fill:\s*red/)
   })
 })
 
@@ -333,6 +361,15 @@ describe('script stripping', () => {
     const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
     expect(sprite).not.toContain('<script')
     expect(sprite).not.toContain('onload')
+  })
+})
+
+describe('all icons in a collection fail', () => {
+  it('warns explicitly when every icon in a non-empty collection failed to process', async () => {
+    const icon = await makeIconWithContent('not-svg-2', '<html></html>')
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('failed to process'))
+    expect(sprite).not.toContain('<symbol')
   })
 })
 

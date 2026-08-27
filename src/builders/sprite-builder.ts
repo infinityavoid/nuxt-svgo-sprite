@@ -340,5 +340,12 @@ export async function buildSprite(
     }
   }
 
+  if (symbols.length === 0) {
+    // Every icon in a non-empty collection failed individually (each already logged
+    // its own error above) — flag the resulting empty wrapper explicitly rather than
+    // leaving the collection silently sprite-less with no summary signal.
+    logger.warn(`All ${icons.length} icon(s) in this collection failed to process — sprite is empty.`)
+  }
+
   return buildSpriteWrapper(symbols)
 }
