@@ -133,7 +133,12 @@ defineProps<{ name: AllIconName }>()
 export function registerUseComponent(icon: IconMeta): void {
   const tpl = addTemplate({
     filename: `nuxt-svgo-sprite/icons/${icon.id}.vue`,
-    getContents: () => `<template><svg v-bind="$attrs"><use href="#${icon.id}"/></svg></template><script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
+    // A newline is required between </template> and <script setup> — vue-tsc parses
+    // this file as plain TypeScript when checking the <script> block, and a bare
+    // `</template><script...>` on one line produces a `';' expected` syntax error in
+    // the consumer's typecheck (found by adversarial testing against a real project).
+    getContents: () => `<template><svg v-bind="$attrs"><use href="#${icon.id}"/></svg></template>
+<script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
     write: true,
   })
   addComponent({ name: icon.componentName, filePath: tpl.dst })

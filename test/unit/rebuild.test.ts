@@ -16,7 +16,13 @@ vi.mock('../../src/builders/collection-builder', () => ({
 }))
 
 vi.mock('../../src/builders/sprite-builder', () => ({
-  buildSprite: vi.fn().mockResolvedValue('<svg><symbol id="home"/></svg>'),
+  // Simulates every passed-in icon succeeding, by default — matches prior tests'
+  // implicit assumption. Tests that need a partial failure call onIconResult
+  // themselves via a one-off mockImplementationOnce.
+  buildSprite: vi.fn((icons: { absolutePath: string }[], _svgoConfig: unknown, _optimizeFiles: boolean, _logger: unknown, _spriteName: string, onIconResult?: (icon: unknown, included: boolean) => void) => {
+    for (const icon of icons) onIconResult?.(icon, true)
+    return Promise.resolve('<svg><symbol id="home"/></svg>')
+  }),
 }))
 
 vi.mock('../../src/templates/templates', () => ({
@@ -192,6 +198,38 @@ describe('createRebuildHandler', () => {
     expect(registerUseComponent).toHaveBeenCalledWith(iconB)
   })
 
+  it('an icon that buildSprite rejects during processing is excluded from the updated collection and never registered as a Use component', async () => {
+    const col = makeCollection('default', '/icons')
+    const goodIcon = { id: 'good', componentName: 'UseGood', absolutePath: '/icons/good.svg' }
+    const badIcon = { id: 'bad', componentName: 'UseBad', absolutePath: '/icons/bad.svg' }
+    const updatedCol = makeCollection('default', '/icons', [goodIcon, badIcon]);
+    (rebuildSingleCollection as ReturnType<typeof vi.fn>).mockResolvedValue(updatedCol);
+    // Override the shared "everything succeeds" mock for this one call: `bad` fails.
+    (buildSprite as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (icons: { id: string }[], _c: unknown, _o: boolean, _l: unknown, _s: string, onIconResult?: (icon: unknown, included: boolean) => void) => {
+        for (const icon of icons) onIconResult?.(icon, icon.id !== 'bad')
+        return Promise.resolve('<svg><symbol id="good"/></svg>')
+      },
+    )
+
+    const ctx = makeCtx({
+      options: {
+        componentPrefix: 'Use',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        svgoConfig: {} as any,
+        optimizeFiles: true,
+        createUseComponents: true,
+      },
+    })
+    const handler = createRebuildHandler(ctx)
+    await handler(col, 'add', '/icons/bad.svg')
+
+    const updated = ctx.collectionsRef.current.find(c => c.name === 'default')!
+    expect(updated.icons).toEqual([goodIcon])
+    expect(registerUseComponent).toHaveBeenCalledOnce()
+    expect(registerUseComponent).toHaveBeenCalledWith(goodIcon)
+  })
+
   it('calls broadcastRefresh when provided', async () => {
     const col = makeCollection('default', '/icons')
     const updatedCol = makeCollection('default', '/icons');
@@ -222,6 +260,7 @@ describe('createRebuildHandler', () => {
       ctx.options.optimizeFiles,
       mockLogger,
       'admin',
+      expect.any(Function),
     )
   })
 

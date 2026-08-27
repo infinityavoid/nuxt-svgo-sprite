@@ -57,10 +57,14 @@ export interface SpriteLogger {
 
 export const defaultSvgoConfig: SvgoConfig = {
   plugins: [
-    // removeViewBox is pinned off explicitly (edge case 1) rather than relying on it
-    // being absent from SVGO's current preset-default — an upstream SVGO release could
-    // restore it, which would silently strip every symbol's viewBox.
-    { name: 'preset-default', params: { overrides: { removeViewBox: false } } },
+    // No removeViewBox override here: SVGO 4's preset-default doesn't include that
+    // plugin at all, and overriding a plugin preset-default doesn't run makes SVGO
+    // print a "not part of preset-default" warning on every single icon (found by
+    // adversarial testing — 200 icons meant 200 warnings on every build). The
+    // "viewBox preservation" test in sprite-builder.test.ts is the tripwire instead:
+    // if a future SVGO version reintroduces removeViewBox into the preset, that test
+    // starts failing and this needs revisiting, rather than silently stripping viewBox.
+    'preset-default',
     { name: 'inlineStyles', params: { onlyMatchedOnce: false } },
     { name: 'removeAttrs', params: { attrs: ['svg:id'] } },
     { name: 'removeDimensions' },
@@ -265,17 +269,32 @@ function buildSpriteWrapper(symbols: string[]): string {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * Called once per icon after buildSprite decides whether it made it into the
+ * sprite. Lets callers (module.ts, rebuild.ts) know the actual emitted icon set,
+ * which can be a strict subset of the input `icons` — an unreadable, empty,
+ * malformed, or non-<svg>-root file is discovered during folder scanning but only
+ * rejected here, during content processing. Consumers of collection.icons for
+ * generated types/components must use this to avoid advertising an icon (a type
+ * union member, a `Use*` component) that doesn't actually exist in any sprite.
+ */
+export type OnIconResult = (icon: IconMeta, included: boolean) => void
+
 export async function buildAllSprites(
   collections: { name: string, icons: IconMeta[] }[],
   svgoConfig: SvgoConfig | undefined,
   optimizeFiles: boolean,
   logger: SpriteLogger,
+  onIconResult?: (collectionName: string, icon: IconMeta, included: boolean) => void,
 ): Promise<Map<string, string>> {
   const contents = new Map<string, string>()
   await Promise.all(
-    collections.map(async col =>
-      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name)),
-    ),
+    collections.map(async (col) => {
+      const perIconCallback: OnIconResult | undefined = onIconResult
+        ? (icon, included) => onIconResult(col.name, icon, included)
+        : undefined
+      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name, perIconCallback))
+    }),
   )
   return contents
 }
@@ -286,6 +305,7 @@ export async function buildSprite(
   optimizeFiles: boolean,
   logger: SpriteLogger,
   spriteName = 'default',
+  onIconResult?: OnIconResult,
 ): Promise<string> {
   if (icons.length === 0) {
     logger.warn('No icons found in collection — sprite skipped.')
@@ -308,10 +328,14 @@ export async function buildSprite(
   }))
 
   for (const { icon, raw } of reads) {
-    if (raw === null) continue
+    if (raw === null) {
+      onIconResult?.(icon, false)
+      continue
+    }
 
     if (raw.trim() === '') {
       logger.error(`"${icon.absolutePath}" is empty — skipping.`)
+      onIconResult?.(icon, false)
       continue
     }
 
@@ -319,6 +343,7 @@ export async function buildSprite(
     // (checked with comments stripped, so "<!-- <symbol> -->" isn't a false positive)
     if (HAS_SYMBOL_RE.test(raw.replace(COMMENT_RE, ''))) {
       logger.error(`"${icon.absolutePath}" contains <symbol> elements and cannot be used as an icon — skipping.`)
+      onIconResult?.(icon, false)
       continue
     }
 
@@ -338,13 +363,16 @@ export async function buildSprite(
       // a <symbol>. Emitting it verbatim would silently corrupt the sprite.
       if (!/^\s*<symbol[\s/>]/.test(result.data)) {
         logger.error(`"${icon.absolutePath}" does not have an <svg> root element — skipping.`)
+        onIconResult?.(icon, false)
         continue
       }
       symbols.push(result.data)
+      onIconResult?.(icon, true)
     }
     catch (err) {
       // Edge case 8: malformed SVG — log and skip, do not fail the whole sprite
       logger.error(`Failed to process "${icon.absolutePath}": ${String(err)} — skipping.`)
+      onIconResult?.(icon, false)
     }
   }
 

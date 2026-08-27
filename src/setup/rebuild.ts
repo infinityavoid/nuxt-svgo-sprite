@@ -3,7 +3,7 @@ import type { Config as SvgoConfig } from 'svgo'
 import { rebuildSingleCollection } from '../builders/collection-builder'
 import { buildSprite } from '../builders/sprite-builder'
 import { buildIconTypesContent, registerUseComponent } from '../templates/templates'
-import type { SpriteCollection } from '../types/types'
+import type { IconMeta, SpriteCollection } from '../types/types'
 import type { TemplateHandles } from '../templates/templates'
 
 interface RebuildOptions {
@@ -51,7 +51,7 @@ export function createRebuildHandler(ctx: RebuildContext) {
           .filter(c => c.name !== collection.name)
           .flatMap(c => c.icons.map(i => i.id)),
       )
-      const icons = rescanned.icons.filter((icon) => {
+      const idCollisionFiltered = rescanned.icons.filter((icon) => {
         if (otherIds.has(icon.id)) {
           ctx.logger.warn(
             `Symbol id collision: "${icon.id}" in collection "${rescanned.name}" is already used by `
@@ -61,21 +61,27 @@ export function createRebuildHandler(ctx: RebuildContext) {
         }
         return true
       })
-      const updatedCol = { ...rescanned, icons }
+
+      // As at cold build (module.ts): buildSprite can reject an individual icon
+      // during content processing (unreadable, empty, malformed, non-<svg> root)
+      // even though it survived folder discovery. Generated types/components must
+      // reflect only what actually made it into the sprite, or a rejected icon still
+      // typechecks and renders a dead reference.
+      const succeeded: IconMeta[] = []
+      const sprite = await buildSprite(
+        idCollisionFiltered,
+        ctx.options.svgoConfig,
+        ctx.options.optimizeFiles,
+        ctx.logger,
+        rescanned.name,
+        (icon, included) => { if (included) succeeded.push(icon) },
+      )
+      const updatedCol = { ...rescanned, icons: succeeded }
 
       ctx.collectionsRef.current = ctx.collectionsRef.current.map(c =>
         c.name === collection.name ? updatedCol : c,
       )
-      ctx.spriteContents.set(
-        collection.name,
-        await buildSprite(
-          updatedCol.icons,
-          ctx.options.svgoConfig,
-          ctx.options.optimizeFiles,
-          ctx.logger,
-          updatedCol.name,
-        ),
-      )
+      ctx.spriteContents.set(collection.name, sprite)
       ctx.iconTypesRef.current = buildIconTypesContent(ctx.collectionsRef.current)
 
       const spriteTplName = ctx.handles.spriteTemplateNames.get(collection.name)

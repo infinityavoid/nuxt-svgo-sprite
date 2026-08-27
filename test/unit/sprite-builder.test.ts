@@ -404,3 +404,21 @@ describe('missing dimensions — px unit handling', () => {
     expect(sprite).toContain('viewBox="0 0 24 24"')
   })
 })
+
+describe('onIconResult callback', () => {
+  it('reports included: true for an icon that made it into the sprite', async () => {
+    const icon = await makeIcon('home')
+    const results: [string, boolean][] = []
+    await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', (i, included) => results.push([i.id, included]))
+    expect(results).toEqual([['home', true]])
+  })
+
+  it('reports included: false for an icon rejected during processing, without including it', async () => {
+    const good = await makeIcon('good')
+    const bad = await makeIconWithContent('bad', '<html></html>')
+    const results: [string, boolean][] = []
+    await buildSprite([good, bad], defaultSvgoConfig, true, mockLogger, 'default', (i, included) => results.push([i.id, included]))
+    expect(results).toContainEqual(['good', true])
+    expect(results).toContainEqual(['bad', false])
+  })
+})

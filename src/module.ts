@@ -13,7 +13,7 @@ import { buildIconTypesContent, setupTemplates } from './templates/templates'
 import { resolveInjectCollections, setupAutoInject } from './plugins/auto-inject'
 import { createRebuildHandler } from './setup/rebuild'
 import { setupDevtools } from './devtools/devtools'
-import type { ModuleOptions } from './types/types'
+import type { IconMeta, ModuleOptions, SpriteCollection } from './types/types'
 
 export type { ModuleOptions } from './types/types'
 
@@ -64,16 +64,35 @@ export default defineNuxtModule<ModuleOptions>({
       return
     }
 
+    // Track, per collection, which discovered icons actually made it into the sprite
+    // — a file can be found during the folder walk but rejected during content
+    // processing (unreadable, empty, malformed, non-<svg> root). Generated types and
+    // Use* components must be built from THIS set, not the raw walk result, or a
+    // rejected icon still gets a type-checking `SvgUse name="broken"` and a
+    // `<UseBroken />` component that both compile but render nothing (found by
+    // adversarial testing).
+    const succeededByCollection = new Map<string, IconMeta[]>()
     const spriteContents = await buildAllSprites(
       collections,
       options.svgoConfig,
       options.optimizeFiles!,
       logger,
+      (collectionName, icon, included) => {
+        if (!included) return
+        const list = succeededByCollection.get(collectionName)
+        if (list) list.push(icon)
+        else succeededByCollection.set(collectionName, [icon])
+      },
     )
-    const collectionsRef = { current: collections }
-    const iconTypesRef = { current: buildIconTypesContent(collections) }
+    const effectiveCollections: SpriteCollection[] = collections.map(c => ({
+      ...c,
+      icons: succeededByCollection.get(c.name) ?? [],
+    }))
 
-    const handles = setupTemplates(collections, options, spriteContents, () => iconTypesRef.current)
+    const collectionsRef = { current: effectiveCollections }
+    const iconTypesRef = { current: buildIconTypesContent(effectiveCollections) }
+
+    const handles = setupTemplates(effectiveCollections, options, spriteContents, () => iconTypesRef.current)
 
     nuxt.hook('prepare:types', ({ references }) => {
       references.push({ path: path.resolve(nuxt.options.buildDir, handles.typeTemplateName) })
@@ -84,7 +103,7 @@ export default defineNuxtModule<ModuleOptions>({
 
     if (!options.autoInjectSprite) {
       if (nuxt.options.dev) {
-        const names = collections.map(c => `<${c.spriteComponentName} />`).join(', ')
+        const names = effectiveCollections.map(c => `<${c.spriteComponentName} />`).join(', ')
         logger.info(
           `Sprites are not injected automatically. Add ${names} to your app.vue, or set \`autoInjectSprite: true\`.`,
         )
@@ -96,7 +115,7 @@ export default defineNuxtModule<ModuleOptions>({
           'autoInjectSprite: [] injects nothing (same as `false`) — if that\'s intentional, use `autoInjectSprite: false` instead.',
         )
       }
-      const injectCols = resolveInjectCollections(options.autoInjectSprite, collections, logger)
+      const injectCols = resolveInjectCollections(options.autoInjectSprite, effectiveCollections, logger)
       if (injectCols.length > 0) {
         injectTemplateName = setupAutoInject(injectCols, spriteContents)
         for (const c of injectCols) injectedCollectionNames.add(c.name)
@@ -132,9 +151,9 @@ export default defineNuxtModule<ModuleOptions>({
 
     nuxt.hook('close', cleanup)
 
-    const total = collections.reduce((n, c) => n + c.icons.length, 0)
+    const total = effectiveCollections.reduce((n, c) => n + c.icons.length, 0)
     logger.info(
-      `Sprite built (${total} icon${total !== 1 ? 's' : ''} across ${collections.length} collection${collections.length !== 1 ? 's' : ''}).`,
+      `Sprite built (${total} icon${total !== 1 ? 's' : ''} across ${effectiveCollections.length} collection${effectiveCollections.length !== 1 ? 's' : ''}).`,
     )
   },
 })
