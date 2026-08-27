@@ -1,6 +1,26 @@
 # Changelog
 
 
+## v3.1.0...3.1.1
+
+[compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v3.1.0...3.1.1)
+
+### 🚀 Enhancements
+
+- DevTools shows only real components, adapts to light theme ([1c62d2a](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/1c62d2a))
+
+### 🔥 Performance
+
+- Cache unchanged icons across HMR rebuilds ([3a00bd9](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/3a00bd9))
+
+### 🏡 Chore
+
+- Merge 3.1.0 into main ([16eb358](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/16eb358))
+
+### ❤️ Contributors
+
+- Anton Ustinov <Anton.ustinov02@mail.ru>
+
 ## v3.0.0...3.1.0
 
 [compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v3.0.0...3.1.0)

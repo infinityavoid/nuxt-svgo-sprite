@@ -8,17 +8,20 @@ import type { ClientFunctions, CollectionDTO, ServerFunctions } from './types'
 
 /**
  * Projects internal SpriteCollection[] to the serializable DTO used by DevTools.
+ * `componentName` is only included when createUseComponents is on — otherwise no
+ * such component was ever registered, and showing one would be misleading.
  * Exported for unit testing.
  */
 export function projectCollections(
   collections: SpriteCollection[],
   injectedCollectionNames: Set<string>,
+  createUseComponents: boolean,
 ): CollectionDTO[] {
   return collections.map(col => ({
     name: col.name,
     icons: col.icons.map(icon => ({
       id: icon.id,
-      componentName: icon.componentName,
+      ...(createUseComponents ? { componentName: icon.componentName } : {}),
     })),
     iconCount: col.icons.length,
     injected: injectedCollectionNames.has(col.name),
@@ -52,15 +55,49 @@ function clientHtml(): string {
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>SVG Sprite</title>
   <style>
+    :root {
+      --bg: #0f172a;
+      --fg: #e2e8f0;
+      --heading: #f8fafc;
+      --border: #1e293b;
+      --muted: #94a3b8;
+      --badge-bg: #1e293b;
+      --badge-fg: #64748b;
+      --injected-badge-bg: #14532d;
+      --injected-badge-fg: #86efac;
+      --card-bg: #1e293b;
+      --card-bg-hover: #273448;
+      --preview-filter: invert(1);
+      --empty-fg: #475569;
+    }
+    /* This standalone page has no signal from the DevTools UI's own theme toggle, so
+       it falls back to the OS-level preference — better than always being dark. */
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #ffffff;
+        --fg: #1e293b;
+        --heading: #0f172a;
+        --border: #e2e8f0;
+        --muted: #64748b;
+        --badge-bg: #f1f5f9;
+        --badge-fg: #475569;
+        --injected-badge-bg: #dcfce7;
+        --injected-badge-fg: #166534;
+        --card-bg: #f8fafc;
+        --card-bg-hover: #eef2f7;
+        --preview-filter: none;
+        --empty-fg: #94a3b8;
+      }
+    }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 14px;
-      background: #0f172a;
-      color: #e2e8f0;
+      background: var(--bg);
+      color: var(--fg);
       padding: 16px;
     }
-    h1 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #f8fafc; }
+    h1 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--heading); }
     .collection { margin-bottom: 24px; }
     .collection-header {
       display: flex;
@@ -68,22 +105,22 @@ function clientHtml(): string {
       gap: 8px;
       margin-bottom: 10px;
       padding-bottom: 6px;
-      border-bottom: 1px solid #1e293b;
+      border-bottom: 1px solid var(--border);
     }
-    .collection-name { font-weight: 600; font-size: 13px; color: #94a3b8; }
+    .collection-name { font-weight: 600; font-size: 13px; color: var(--muted); }
     .badge {
       font-size: 11px;
-      background: #1e293b;
+      background: var(--badge-bg);
       border-radius: 4px;
       padding: 1px 6px;
-      color: #64748b;
+      color: var(--badge-fg);
     }
     .injected-badge {
       font-size: 11px;
-      background: #14532d;
+      background: var(--injected-badge-bg);
       border-radius: 4px;
       padding: 1px 6px;
-      color: #86efac;
+      color: var(--injected-badge-fg);
     }
     .icons-grid {
       display: grid;
@@ -97,27 +134,27 @@ function clientHtml(): string {
       gap: 5px;
       padding: 10px 6px;
       border-radius: 8px;
-      background: #1e293b;
+      background: var(--card-bg);
       cursor: pointer;
       transition: background 0.15s;
     }
-    .icon-card:hover { background: #273448; }
+    .icon-card:hover { background: var(--card-bg-hover); }
     .icon-preview {
       width: 32px;
       height: 32px;
       object-fit: contain;
-      filter: invert(1);
+      filter: var(--preview-filter);
     }
     .icon-id {
       font-size: 10px;
-      color: #64748b;
+      color: var(--badge-fg);
       text-align: center;
       word-break: break-all;
       line-height: 1.3;
     }
-    .icon-card:hover .icon-id { color: #94a3b8; }
-    .empty { color: #475569; font-style: italic; }
-    #status { color: #64748b; font-size: 12px; margin-bottom: 12px; }
+    .icon-card:hover .icon-id { color: var(--muted); }
+    .empty { color: var(--empty-fg); font-style: italic; }
+    #status { color: var(--badge-fg); font-size: 12px; margin-bottom: 12px; }
   </style>
 </head>
 <body>
@@ -161,7 +198,8 @@ function clientHtml(): string {
       app.innerHTML = collections.map(function(col) {
         var icons = col.icons.map(function(icon) {
           var src = '/__nuxt-svgo-sprite/svg/' + col.name + '/' + icon.id;
-          return '<div class="icon-card" title="' + esc(icon.componentName) + '">'
+          var title = icon.componentName ? esc(icon.componentName) : esc(icon.id);
+          return '<div class="icon-card" title="' + title + '">'
             + '<img class="icon-preview" src="' + src + '" alt="' + esc(icon.id) + '" onerror="this.style.opacity=0.2">'
             + '<span class="icon-id">' + esc(icon.id) + '</span>'
             + '</div>';
@@ -245,6 +283,7 @@ export function setupDevtools(
   nuxt: Nuxt,
   collectionsRef: { current: SpriteCollection[] },
   injectedCollectionNames: Set<string>,
+  createUseComponents: boolean,
 ): () => Promise<void> {
   let rpc: BirpcGroup<ClientFunctions, ServerFunctions> | undefined
 
@@ -260,7 +299,7 @@ export function setupDevtools(
       'NUXT_SVGO_SPRITE',
       {
         getCollections: () =>
-          projectCollections(collectionsRef.current, injectedCollectionNames),
+          projectCollections(collectionsRef.current, injectedCollectionNames, createUseComponents),
       },
     )
   })

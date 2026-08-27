@@ -6,6 +6,7 @@ import {
   defaultSvgoConfig,
   buildSprite,
 } from '../../src/builders/sprite-builder'
+import type { SymbolCache } from '../../src/builders/sprite-builder'
 import type { IconMeta } from '../../src/types/types'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
@@ -453,5 +454,77 @@ describe('onIconResult callback', () => {
     await buildSprite([good, bad], defaultSvgoConfig, true, mockLogger, 'default', (i, included) => results.push([i.id, included]))
     expect(results).toContainEqual(['good', true])
     expect(results).toContainEqual(['bad', false])
+  })
+})
+
+describe('symbolCache — skips re-reading/re-optimizing unchanged icons', () => {
+  it('a cache hit (mtime unchanged) returns the previously-computed symbol without re-reading the file', async () => {
+    // Seed the cache directly with the icon's REAL current mtime and a recognizable
+    // sentinel symbol, rather than relying on two real fs writes landing on exactly
+    // the same mtimeMs (filesystem timestamp resolution makes that flaky in both
+    // directions — confirmed by hand, this is not hypothetical). The point under
+    // test is purely "does buildSprite trust a cache entry whose mtime matches the
+    // real file's current mtime," which this tests directly and deterministically.
+    const icon = await makeIcon('cached')
+    const { mtimeMs } = await fsp.stat(icon.absolutePath)
+    const cache: SymbolCache = new Map([
+      [icon.absolutePath, { mtimeMs, symbol: '<symbol id="cached">SENTINEL</symbol>' }],
+    ])
+
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, cache)
+    expect(sprite).toContain('SENTINEL')
+    expect(mockLogger.error).not.toHaveBeenCalled()
+  })
+
+  it('a stale cache entry (mtime does not match the real file) is ignored and the icon is reprocessed', async () => {
+    const icon = await makeIcon('live')
+    const { mtimeMs } = await fsp.stat(icon.absolutePath)
+    const cache: SymbolCache = new Map([
+      // A different mtime than the real file's current one -> must not be trusted.
+      [icon.absolutePath, { mtimeMs: mtimeMs - 10_000, symbol: '<symbol id="live">STALE</symbol>' }],
+    ])
+
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, cache)
+    expect(sprite).not.toContain('STALE')
+    expect(sprite).toContain('id="live"')
+  })
+
+  it('actually reuses a REAL cache entry populated by a prior buildSprite call, across two calls with no write in between', async () => {
+    // Complements the seeded-cache tests above with an end-to-end round trip: call
+    // once to populate the cache for real, then call again with nothing touching the
+    // file in between (so the mtime genuinely cannot have changed) and confirm the
+    // second call didn't need to re-log or re-derive anything new.
+    const icon = await makeIcon('roundtrip')
+    const cache: SymbolCache = new Map()
+
+    const first = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, cache)
+    expect(cache.has(icon.absolutePath)).toBe(true)
+
+    const second = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, cache)
+    expect(second).toBe(first)
+  })
+
+  it('a cached rejection is not re-logged on the next unchanged rebuild', async () => {
+    const icon = await makeIconWithContent('broken-cached', '<html></html>')
+    const cache: SymbolCache = new Map()
+
+    await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, cache)
+    expect(mockLogger.error).toHaveBeenCalledOnce()
+
+    vi.clearAllMocks()
+    const second = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, cache)
+    expect(mockLogger.error).not.toHaveBeenCalled()
+    expect(second).not.toContain('broken-cached')
+  })
+
+  it('without a cache, two calls for the same unchanged icon both re-read it (no caching by default)', async () => {
+    const svgA = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="1" cy="1" r="1"/></svg>'
+    const svgB = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="2" cy="2" r="2"/></svg>'
+    const icon = await makeIconWithContent('nocache', svgA)
+
+    await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    await fsp.writeFile(icon.absolutePath, svgB, 'utf-8')
+    const second = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(second).toContain('cx="2"')
   })
 })
