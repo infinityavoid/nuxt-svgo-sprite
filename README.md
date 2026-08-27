@@ -89,7 +89,7 @@ Each discovered collection gets:
 
 A few more behaviors worth knowing before organizing a large icon set:
 - **Unknown collection names** in `autoInjectSprite: [...]` are warned about and skipped, listing the collections that were actually found.
-- **Duplicate symbol ids** (e.g. a root `admin-user.svg` alongside `admin/user.svg`) are warned about; the later one is dropped.
+- **Duplicate symbol ids** (e.g. a root `admin-user.svg` alongside `admin/user.svg`) are warned about; one of them is dropped — the warning names exactly which file.
 - **Filenames with spaces, capitals, or other non-standard characters** are normalized (`My Icon.svg` → id `my-icon`) with a warning naming the original file — useful to know before naming hundreds of files.
 - **A malformed or empty SVG, or one whose root element isn't `<svg>`,** is logged as an error and excluded from that build — it does not fail the whole sprite, and it does not appear in the generated types or components.
 - `inputDir` also accepts a plain relative path (e.g. `'assets/icons'`, resolved against `srcDir`) — `~` aliases are supported, not required.
@@ -251,7 +251,7 @@ export default defineNuxtConfig({
 | `createUseComponents` | `boolean` | `false` | Generate a wrapper component per icon. |
 | `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
 | `autoInjectSprite` | `boolean \| string[]` | `false` | Inject sprite(s) into every SSR page automatically. |
-| `svgoConfig` | `SvgoConfig` | internal defaults | When set, `plugins` REPLACES the built-in default plugin list (not merged) — pass the full list you want. See [SVGO docs](https://svgo.dev) for available plugins. |
+| `svgoConfig` | `SvgoConfig` | internal defaults | When set, `plugins` REPLACES the built-in default plugin list (not merged) — pass the full list you want. Other `SvgoConfig` keys (`multipass`, `floatPrecision`, `js2svg`, ...) are passed straight through. See [SVGO docs](https://svgo.dev) for available plugins. |
 
 ## Migrating from v2
 
@@ -273,16 +273,16 @@ There is no `collections: Record<string, string>` config key. Collections are di
 ```ts
 // v2
 spriteOptions: {
-  shape: { transform: [{ svgo: { plugins: [{ name: 'preset-default' }] } }] }
+  shape: { transform: [{ svgo: { plugins: [{ name: 'preset-default', params: { overrides: { removeComments: false } } }] } }] }
 }
 
 // v3
 svgoConfig: {
-  plugins: [{ name: 'preset-default' }]
+  plugins: [{ name: 'preset-default', params: { overrides: { removeComments: false } } }]
 }
 ```
 
-> `viewBox` is preserved by default without any override — SVGO 4's `preset-default` doesn't include `removeViewBox` at all, so passing `overrides: { removeViewBox: false }` only produces a "not part of preset-default" warning, it doesn't do anything.
+> `viewBox` is preserved by default without any override needed — SVGO 4's `preset-default` doesn't include `removeViewBox` at all, so passing `overrides: { removeViewBox: false }` only produces a "not part of preset-default" warning; it doesn't do anything.
 
 svg-sprite-specific keys (`mode`, `svg.rootAttributes`, `shape.*`) have no v3 equivalent — these are handled internally.
 
