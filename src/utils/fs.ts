@@ -20,11 +20,22 @@ const IGNORE_DIR_NAMES = ['node_modules', 'dist', 'build', 'coverage', 'test', '
 const IGNORE_DIRS = IGNORE_DIR_NAMES.flatMap(d => [`${d}/**`, `**/${d}/**`])
 
 /**
+ * Matches Nuxt's own `nuxt.options.ignore`/`.nuxtignore` filter — see `@nuxt/kit`'s
+ * `createIsIgnored`. Optional so callers with no Nuxt context (unit tests) can omit
+ * it; `walkInputDir`/`readDirectSvgFiles` otherwise have no Nuxt dependency.
+ * Always called with a FORWARD-SLASH path, regardless of platform — Nuxt's own
+ * rootDir/layer roots are pathe-normalized internally (even on Windows), and
+ * `createIsIgnored`'s `pathname.startsWith(cwd)` check requires the same convention
+ * on both sides to match.
+ */
+export type IsIgnored = (absPath: string) => boolean
+
+/**
  * Walks inputDir and groups .svg files by their collection (parent folder segments).
  * Returns one WalkerEntry per distinct collection; entries with no files are omitted.
  * Symlinks and node_modules/dist/build/coverage/test dirs are excluded.
  */
-export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Promise<WalkerEntry[]> {
+export async function walkInputDir(inputDir: string, logger?: WalkerLogger, isIgnored?: IsIgnored): Promise<WalkerEntry[]> {
   try {
     await fsp.access(inputDir)
   }
@@ -40,7 +51,9 @@ export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Pro
     followSymbolicLinks: false,
     caseSensitiveMatch: false,
     ignore: IGNORE_DIRS,
-  })).sort() // deterministic symbol/collection order across platforms and filesystems
+  }))
+    .filter(f => !isIgnored?.(f))
+    .sort() // deterministic symbol/collection order across platforms and filesystems
 
   const result = new Map<string, WalkerEntry>()
 
@@ -109,7 +122,7 @@ export async function walkInputDir(inputDir: string, logger?: WalkerLogger): Pro
  * named "default" (see collection-builder.ts's rebuildSingleCollection).
  * Missing directory → empty array, matching walkInputDir's behavior.
  */
-export async function readDirectSvgFiles(dir: string, logger?: WalkerLogger): Promise<string[]> {
+export async function readDirectSvgFiles(dir: string, logger?: WalkerLogger, isIgnored?: IsIgnored): Promise<string[]> {
   let entries: import('node:fs').Dirent[]
   try {
     entries = await fsp.readdir(dir, { withFileTypes: true })
@@ -124,5 +137,10 @@ export async function readDirectSvgFiles(dir: string, logger?: WalkerLogger): Pr
     // matching walkInputDir's followSymbolicLinks: false.
     .filter(e => e.isFile() && /\.svg$/i.test(e.name))
     .map(e => path.normalize(path.join(dir, e.name)))
+    // isIgnored (Nuxt's createIsIgnored) expects forward-slash paths — Nuxt's own
+    // rootDir/layer roots are pathe-normalized internally, even on Windows. Convert
+    // just for this check; the returned paths stay OS-native, matching every other
+    // consumer of this function's return value.
+    .filter(f => !isIgnored?.(f.replace(/\\/g, '/')))
     .sort()
 }

@@ -102,37 +102,16 @@ describe('handleWatchEvent', () => {
     expect(onChange).toHaveBeenCalledWith(adminCol, 'change', '/icons/admin/star.svg')
   })
 
-  it('logs English unlink warning with icon id and component name', async () => {
+  it('never logs a warning itself on unlink — that used to be the ADR-011 "restart to unregister" warning, obsolete since ADR-025 (item #16) actually unregisters the component instead', async () => {
     const col = makeCollection('admin', '/icons/admin', ['admin'], [
       { id: 'admin-star', componentName: 'UseAdminStar', absolutePath: '/icons/admin/star.svg' },
     ])
     const onChange = vi.fn().mockResolvedValue(undefined)
     await handleWatchEvent('unlink', '/icons/admin/star.svg', col, mockLogger, onChange)
 
-    expect(mockLogger.warn).toHaveBeenCalledOnce()
-    const msg = mockLogger.warn.mock.calls[0]![0] as string
-    expect(msg).toContain('admin-star')
-    expect(msg).toContain('UseAdminStar')
-    expect(msg).toContain('Restart dev server')
-    expect(onChange).toHaveBeenCalledOnce()
-  })
-
-  it('does not log unlink warning if the icon is not in the collection', async () => {
-    const onChange = vi.fn().mockResolvedValue(undefined)
-    // adminCol has no icons
-    await handleWatchEvent('unlink', '/icons/admin/ghost.svg', adminCol, mockLogger, onChange)
     expect(mockLogger.warn).not.toHaveBeenCalled()
     expect(onChange).toHaveBeenCalledOnce()
-  })
-
-  it('does not log unlink warning for add or change events', async () => {
-    const col = makeCollection('admin', '/icons/admin', ['admin'], [
-      { id: 'admin-star', componentName: 'UseAdminStar', absolutePath: '/icons/admin/star.svg' },
-    ])
-    const onChange = vi.fn().mockResolvedValue(undefined)
-    await handleWatchEvent('change', '/icons/admin/star.svg', col, mockLogger, onChange)
-    await handleWatchEvent('add', '/icons/admin/star.svg', col, mockLogger, onChange)
-    expect(mockLogger.warn).not.toHaveBeenCalled()
+    expect(onChange).toHaveBeenCalledWith(col, 'unlink', '/icons/admin/star.svg')
   })
 })
 
@@ -194,6 +173,25 @@ describe('setupWatcher', () => {
     expect(mockLogger.warn).not.toHaveBeenCalled()
   })
 
+  it('resolves relativePath against srcDir, not rootDir, when they differ', async () => {
+    // Regression: Nuxt's own first-party consumers (components/imports modules) all
+    // resolve builder:watch's relativePath against srcDir, not rootDir — they only
+    // ever coincide by default. A deliberately unrelated rootDir here means the OLD
+    // rootDir-based resolution would misroute this event entirely (or point at a
+    // nonexistent path), while srcDir-based resolution correctly finds "default".
+    const srcDir = path.dirname(iconRoot)
+    const unrelatedRootDir = path.join(os.tmpdir(), 'unrelated-root-dir-for-srcdir-test')
+    const nuxt = makeMockNuxt(unrelatedRootDir, srcDir)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+
+    const relToSrcDir = path.relative(srcDir, path.join(iconRoot, 'home.svg'))
+    await nuxt.triggerWatch('change', relToSrcDir)
+    await new Promise(r => setTimeout(r, 150))
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange.mock.calls[0]![0].name).toBe('default')
+  })
+
   it('does not call onCollectionChange for non-SVG files', async () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
@@ -235,7 +233,7 @@ describe('setupWatcher', () => {
     expect(() => cleanup()).not.toThrow()
   })
 
-  it('reads collectionsRef.current live, not a setup-time snapshot (ADR-011 warning uses fresh icons)', async () => {
+  it('reads collectionsRef.current live, not a setup-time snapshot', async () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
@@ -251,8 +249,10 @@ describe('setupWatcher', () => {
     await nuxt.triggerWatch('unlink', path.relative(rootDir, path.join(iconRoot, 'admin', 'star.svg')))
     await new Promise(r => setTimeout(r, 150))
 
-    // The setup-time snapshot had no icons for admin, so a stale-closure implementation
-    // would never find `admin-star` to warn about.
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('admin-star'))
+    // The setup-time snapshot had no icons for admin — a stale-closure implementation
+    // would pass THAT stale, icon-less collection to onChange instead of the current one.
+    expect(onChange).toHaveBeenCalledOnce()
+    const passedCollection = onChange.mock.calls[0]![0] as SpriteCollection
+    expect(passedCollection.icons.map(i => i.id)).toEqual(['admin-star'])
   })
 })

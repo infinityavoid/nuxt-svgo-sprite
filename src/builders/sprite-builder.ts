@@ -56,13 +56,23 @@ export interface SpriteLogger {
 
 export const defaultSvgoConfig: SvgoConfig = {
   plugins: [
+    // inlineStyles is overridden INSIDE preset-default (not appended as a second,
+    // separate plugin afterward) so it runs in its normal position within
+    // preset-default's own single pass, before cleanupIds gets its turn. A second,
+    // independent inlineStyles pass appended after preset-default runs too late:
+    // cleanupIds (also part of the preset) has already run against the untouched
+    // <style>/class-based markup by then, and leaves ids referenced by a
+    // multiple-times-matched class in place because it can't yet see that those
+    // classes are about to be inlined away. Verified directly: the two-pass form
+    // left `id="unused1"`/`id="unused2"` in optimizer output for a two-element
+    // multi-matched `.a` class; the overrides form removed both.
+    //
     // No removeViewBox override: SVGO 4's preset-default doesn't include that plugin,
     // and overriding a plugin the preset doesn't run prints a "not part of
     // preset-default" warning per icon per build. The "viewBox preservation" test in
     // sprite-builder.test.ts is the tripwire — if a future SVGO reintroduces
     // removeViewBox into the preset, that test starts failing and this needs revisiting.
-    'preset-default',
-    { name: 'inlineStyles', params: { onlyMatchedOnce: false } },
+    { name: 'preset-default', params: { overrides: { inlineStyles: { onlyMatchedOnce: false } } } },
     { name: 'removeAttrs', params: { attrs: ['svg:id'] } },
     { name: 'removeDimensions' },
     { name: 'removeXMLNS' },
@@ -199,6 +209,42 @@ function makeConvertToSymbolPlugin(iconId: string): Record<string, unknown> {
   }
 }
 
+// Rewrites literal fill/stroke color VALUES to "currentColor", so an icon's color can
+// be controlled from outside (CSS `color`, or a `<SvgUse fill="...">`/`stroke="..."`
+// attribute forwarded onto the wrapping <svg>) instead of being locked to whatever
+// color the source file happened to be authored/exported with. Skips values that
+// are already dynamic or aren't a literal color: "none" (explicitly no fill/stroke),
+// "currentColor" itself, "transparent"/"inherit", a CSS custom property (var(...)),
+// and a url(#id) reference into a <linearGradient>/<pattern> def (rewriting that would
+// break the reference, not recolor anything).
+const COLOR_ATTRS = ['fill', 'stroke'] as const
+const NON_LITERAL_COLOR_VALUES = new Set(['none', 'currentColor', 'transparent', 'inherit'])
+
+function isLiteralColorValue(value: string): boolean {
+  const v = value.trim()
+  if (NON_LITERAL_COLOR_VALUES.has(v)) return false
+  if (v.startsWith('url(') || v.startsWith('var(')) return false
+  return v.length > 0
+}
+
+function makeNormalizeColorsPlugin(): Record<string, unknown> {
+  return {
+    name: 'normalizeColors',
+    fn: () => ({
+      element: {
+        enter(node: AstElement) {
+          for (const attr of COLOR_ATTRS) {
+            const value = node.attributes[attr]
+            if (value !== undefined && isLiteralColorValue(value)) {
+              node.attributes[attr] = 'currentColor'
+            }
+          }
+        },
+      },
+    }),
+  }
+}
+
 // ─── Config builder ───────────────────────────────────────────────────────────
 
 function iconIdPrefix(spriteName: string, iconId: string): string {
@@ -213,16 +259,28 @@ function iconIdPrefix(spriteName: string, iconId: string): string {
 // defineNuxtModule's `defaults`, so `options.svgoConfig` is undefined unless the user
 // set it. Non-`plugins` keys of the user's config (multipass, floatPrecision, js2svg,
 // ...) are passed through as-is; only `plugins` gets the replace treatment.
+export interface ColorNormalizationOptions {
+  /** Rewrite literal fill/stroke values to "currentColor". @default false */
+  normalize: boolean
+  /**
+   * Icons whose id matches are left untouched — for icons that intentionally keep
+   * multi-color fills (e.g. a colored logo). Tested against `icon.id`.
+   */
+  exclude?: RegExp
+}
+
 function buildIconConfig(
   userSvgoConfig: SvgoConfig | undefined,
   spriteName: string,
   icon: IconMeta,
   optimizeFiles: boolean,
+  colorOptions?: ColorNormalizationOptions,
 ): SvgoConfig {
   const skipOptimization = !optimizeFiles || icon.raw === true
   const optimizationPlugins = skipOptimization
     ? []
     : (userSvgoConfig?.plugins ?? defaultSvgoConfig.plugins ?? [])
+  const shouldNormalizeColors = colorOptions?.normalize === true && !colorOptions.exclude?.test(icon.id)
   return {
     ...userSvgoConfig,
     plugins: [
@@ -239,6 +297,11 @@ function buildIconConfig(
       // optimization list above, not this structural block).
       { name: 'removeScripts' },
       makeInlineDefsPlugin(),
+      // Opt-in (colorOptions.normalize, default false) — kept in the structural
+      // block rather than defaultSvgoConfig so it still applies when the user sets
+      // their own svgoConfig (which replaces the optimization list, not this block —
+      // see ADR-021).
+      ...(shouldNormalizeColors ? [makeNormalizeColorsPlugin()] : []),
       {
         name: 'prefixIds',
         params: {
@@ -276,10 +339,59 @@ function ensureViewBox(svg: string): string {
   return svg
 }
 
+// ─── Raw-path <style> scoping check ───────────────────────────────────────────
+
+// On the raw/optimizeFiles:false path, a source <style> block survives verbatim into
+// the shared sprite document (optimizationPlugins is empty there — see
+// buildIconConfig). A CLASS selector is safe: prefixClassNames (above) rewrites it to
+// an icon-unique name, so it can only ever match elements inside this one icon. A
+// selector with no class component at all (an element type, "*", an attribute
+// selector, an id) has nothing for prefixing to scope — once inlined, it applies
+// page-wide to every matching element, not just this icon's <symbol>. This is a
+// heuristic, warning-only check (deliberately conservative: it flags a selector only
+// when NONE of its parts reference a class at all, so a compound/descendant selector
+// that includes a class anywhere, e.g. ".icon circle", is not flagged — prefixing
+// already scopes it via the class part). Nested at-rules (@media, @supports, ...) are
+// not parsed into their inner rules; only the outer at-rule prelude is checked
+// (harmless — it starts with "@" and is skipped), so a selector inside a nested block
+// can be missed. That's an accepted limitation of a lightweight, non-destructive
+// warning, not a silent correctness claim.
+const STYLE_BLOCK_RE = /<style\b[^>]*>([\s\S]*?)<\/style>/gi
+const CSS_COMMENT_RE = /\/\*[\s\S]*?\*\//g
+
+function hasUnscopedStyleSelector(svg: string): boolean {
+  STYLE_BLOCK_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = STYLE_BLOCK_RE.exec(svg))) {
+    const css = match[1]!.replace(CSS_COMMENT_RE, '')
+    for (const chunk of css.split('}')) {
+      const selectorGroup = chunk.split('{')[0]!.trim()
+      if (!selectorGroup || selectorGroup.startsWith('@')) continue
+      for (const selector of selectorGroup.split(',')) {
+        if (!selector.includes('.')) return true
+      }
+    }
+  }
+  return false
+}
+
 // ─── Sprite assembly ──────────────────────────────────────────────────────────
 
 function buildSpriteWrapper(symbols: string[]): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="${SPRITE_STYLE}">\n${symbols.join('\n')}\n</svg>`
+}
+
+/**
+ * Total UTF-8 byte size of every sprite, summed across collections — every inlined
+ * sprite ships on every page, so this is the number that actually matters for
+ * payload budgeting (not `.length`, which undercounts multi-byte characters).
+ */
+export function totalSpriteBytes(spriteContents: Map<string, string>): number {
+  let total = 0
+  for (const content of spriteContents.values()) {
+    total += Buffer.byteLength(content, 'utf-8')
+  }
+  return total
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -321,6 +433,8 @@ export async function buildAllSprites(
   logger: SpriteLogger,
   onIconResult?: (collectionName: string, icon: IconMeta, included: boolean) => void,
   cache?: SymbolCache,
+  colorOptions?: ColorNormalizationOptions,
+  isUsed?: (icon: IconMeta) => boolean,
 ): Promise<Map<string, string>> {
   const contents = new Map<string, string>()
   await Promise.all(
@@ -328,7 +442,7 @@ export async function buildAllSprites(
       const perIconCallback: OnIconResult | undefined = onIconResult
         ? (icon, included) => onIconResult(col.name, icon, included)
         : undefined
-      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name, perIconCallback, cache))
+      contents.set(col.name, await buildSprite(col.icons, svgoConfig, optimizeFiles, logger, col.name, perIconCallback, cache, colorOptions, isUsed))
     }),
   )
   return contents
@@ -342,6 +456,14 @@ export async function buildSprite(
   spriteName = 'default',
   onIconResult?: OnIconResult,
   cache?: SymbolCache,
+  colorOptions?: ColorNormalizationOptions,
+  // Item #6 (tree-shaking), production builds only (see module.ts). When provided
+  // and returns false for an icon, that icon still succeeds processing normally —
+  // still cached, still reported to onIconResult as included=true, so generated
+  // types/DevTools/Use* components stay unaffected — it is simply excluded from the
+  // <symbol> markup THIS call returns. Undefined behaves exactly as before (every
+  // icon included) — fully backward compatible.
+  isUsed?: (icon: IconMeta) => boolean,
 ): Promise<string> {
   if (icons.length === 0) {
     logger.warn('No icons found in collection — sprite skipped.')
@@ -349,6 +471,7 @@ export async function buildSprite(
   }
 
   const symbols: string[] = []
+  let succeededCount = 0
 
   // Read every icon file concurrently (I/O-bound, independent of each other) instead
   // of one at a time — Promise.all preserves array order regardless of completion
@@ -385,7 +508,8 @@ export async function buildSprite(
 
     if (result.kind === 'cached') {
       if (result.entry.symbol !== null) {
-        symbols.push(result.entry.symbol)
+        succeededCount++
+        if (isUsed === undefined || isUsed(icon)) symbols.push(result.entry.symbol)
         onIconResult?.(icon, true)
       }
       else {
@@ -422,7 +546,11 @@ export async function buildSprite(
     const input = ensureViewBox(raw)
     const missingDimensions = !hasViewBox && input === raw
 
-    const config = buildIconConfig(svgoConfig, spriteName, icon, optimizeFiles)
+    const config = buildIconConfig(svgoConfig, spriteName, icon, optimizeFiles, colorOptions)
+    // Only meaningful on the raw path — on the optimized path inlineStyles already
+    // removes <style> blocks entirely, so there is nothing left to leak.
+    const skipsOptimization = !optimizeFiles || icon.raw === true
+    const unscopedStyle = skipsOptimization && hasUnscopedStyleSelector(raw)
     try {
       const optimized = optimize(input, config)
       // convertToSymbol only renames a root <svg> — if the source's root element
@@ -437,7 +565,16 @@ export async function buildSprite(
       if (missingDimensions) {
         logger.warn(`"${icon.absolutePath}" has no viewBox or dimensions — included as-is, may not scale correctly.`)
       }
-      symbols.push(optimized.data)
+      if (unscopedStyle) {
+        logger.warn(
+          `"${icon.absolutePath}" has a <style> rule with no class selector — on the raw/`
+          + `optimizeFiles:false path it is not scoped to this icon and will apply page-wide `
+          + `once the sprite is inlined. Scope the rule to a class (SVGO will prefix it `
+          + `automatically), or remove the <style> block.`,
+        )
+      }
+      succeededCount++
+      if (isUsed === undefined || isUsed(icon)) symbols.push(optimized.data)
       cache?.set(icon.absolutePath, { mtimeMs, symbol: optimized.data })
       onIconResult?.(icon, true)
     }
@@ -450,11 +587,16 @@ export async function buildSprite(
   }
 
   if (symbols.length === 0) {
-    // Every icon in a non-empty collection failed individually (each already logged
-    // its own error above). Return '' here too — same empty-sprite shape as the
-    // icons.length === 0 case above, which the generated Sprite.vue template already
-    // handles via `spriteContents.get(name) ?? ''`.
-    logger.warn(`All ${icons.length} icon(s) in this collection failed to process — sprite is empty.`)
+    // Same empty-sprite shape either way — the generated Sprite.vue template already
+    // handles it via `spriteContents.get(name) ?? ''` — but the REASON differs:
+    // distinguish "every icon failed processing" (a real problem, already logged
+    // per-icon above) from "every icon was tree-shaken out" (expected, not an error).
+    if (succeededCount > 0) {
+      logger.info(`All ${succeededCount} icon(s) in this collection were tree-shaken out (not detected as used) — sprite is empty.`)
+    }
+    else {
+      logger.warn(`All ${icons.length} icon(s) in this collection failed to process — sprite is empty.`)
+    }
     return ''
   }
 

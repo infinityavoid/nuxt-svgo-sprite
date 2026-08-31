@@ -1,16 +1,18 @@
 import { updateTemplates } from '@nuxt/kit'
 import type { Config as SvgoConfig } from 'svgo'
 import { rebuildSingleCollection } from '../builders/collection-builder'
-import { buildSprite, type SymbolCache } from '../builders/sprite-builder'
-import { buildIconTypesContent, registerUseComponent } from '../templates/templates'
+import { buildSprite, type SymbolCache, type ColorNormalizationOptions } from '../builders/sprite-builder'
+import { buildIconTypesContent, writeUseComponentsFileSync } from '../templates/templates'
 import type { IconMeta, SpriteCollection } from '../types/types'
 import type { TemplateHandles } from '../templates/templates'
+import type { IsIgnored } from '../utils/fs'
 
 interface RebuildOptions {
   componentPrefix: string
   svgoConfig: SvgoConfig | undefined
   optimizeFiles: boolean
   createUseComponents: boolean
+  colorOptions?: ColorNormalizationOptions
 }
 
 interface RebuildLogger {
@@ -33,6 +35,11 @@ export interface RebuildContext {
    * collection skip re-reading/re-optimizing. Optional for callers that don't need it
    * (e.g. tests). */
   symbolCache?: SymbolCache
+  /**
+   * Same filter the cold build applied — keeps a rebuild consistent with it (an
+   * ignored file must not reappear on rescan just because it changed).
+   */
+  isIgnored?: IsIgnored
 }
 
 export function createRebuildHandler(ctx: RebuildContext) {
@@ -44,6 +51,7 @@ export function createRebuildHandler(ctx: RebuildContext) {
         collection,
         ctx.options.componentPrefix,
         ctx.logger,
+        ctx.isIgnored,
       )
 
       // Re-check symbol-id uniqueness against the OTHER live collections — a single-
@@ -80,6 +88,7 @@ export function createRebuildHandler(ctx: RebuildContext) {
         rescanned.name,
         (icon, included) => { if (included) succeeded.push(icon) },
         ctx.symbolCache,
+        ctx.options.colorOptions,
       )
       const updatedCol = { ...rescanned, icons: succeeded }
 
@@ -99,19 +108,41 @@ export function createRebuildHandler(ctx: RebuildContext) {
           || (updateInject === true && t.filename === ctx.injectTemplateName),
       })
 
-      if (ctx.options.createUseComponents) {
+      if (ctx.options.createUseComponents && ctx.handles.useComponentsFilePath) {
         // Diff against the collection's icon list from BEFORE this rebuild, rather
         // than trusting `event`/`absPath` alone — the debounced handler only ever
-        // fires with the LAST raw fs event's arguments, so dropping several new
-        // files into a folder at once (or an 'add' immediately followed by a
-        // 'change') can coalesce into one firing whose event/absPath describe only
-        // one of the changes. Registering every icon that's newly present catches
-        // all of them regardless of what triggered this particular rebuild.
+        // fires with the LAST raw fs event's arguments, so dropping several changes
+        // into a folder at once (or an 'add' immediately followed by an 'unlink')
+        // can coalesce into one firing whose event/absPath describe only one of the
+        // changes. Comparing the full before/after icon sets catches all of them
+        // regardless of what triggered this particular rebuild.
         const previousPaths = new Set(collection.icons.map(i => i.absolutePath))
-        for (const newIcon of updatedCol.icons) {
-          if (previousPaths.has(newIcon.absolutePath)) continue
-          registerUseComponent(newIcon)
-          ctx.logger.info(`Registered new component <${newIcon.componentName} />.`)
+        const currentPaths = new Set(updatedCol.icons.map(i => i.absolutePath))
+        const added = updatedCol.icons.filter(i => !previousPaths.has(i.absolutePath))
+        const removed = collection.icons.filter(i => !currentPaths.has(i.absolutePath))
+
+        if (added.length > 0 || removed.length > 0) {
+          // Rewrite the WHOLE shared Use* components file from the current,
+          // authoritative icon set (ctx.collectionsRef.current already reflects
+          // updatedCol, updated above) — addComponentExports re-reads this file's
+          // export names fresh on every components:dirs firing, so a dropped export
+          // here genuinely unregisters that icon's component (ADR-025/ADR-011),
+          // not just a warning telling the user to restart.
+          writeUseComponentsFileSync(ctx.handles.useComponentsFilePath, ctx.collectionsRef.current)
+          for (const icon of added) ctx.logger.info(`Registered new component <${icon.componentName} />.`)
+          for (const icon of removed) ctx.logger.info(`Unregistered component <${icon.componentName} />.`)
+
+          // addComponentExports' re-resolution only takes effect the next time
+          // Nuxt's own components module re-scans (components:extend), which is
+          // gated behind Nuxt's internal "app structure version" cache — the
+          // FILTERED updateTemplates() call above does NOT invalidate that cache
+          // (only a call with no filter does), so on its own it would leave the
+          // rewritten file unregistered until some unrelated file event happened to
+          // trigger a full regen. A no-filter call forces that re-resolution
+          // ourselves, right here, rather than depending on Nuxt's own builder:watch
+          // handler happening to run after ours (see watcher.ts for why that can no
+          // longer be assumed).
+          await updateTemplates()
         }
       }
 

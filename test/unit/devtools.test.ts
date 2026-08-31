@@ -2,9 +2,23 @@ import os from 'node:os'
 import path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { projectCollections, resolveIconPreviewPath, createDevtoolsMiddleware } from '../../src/devtools/devtools'
+import {
+  projectCollections,
+  resolveIconPreviewPath,
+  resolveDevtoolsRoute,
+  createDevtoolsMiddleware,
+  setupDevtools,
+} from '../../src/devtools/devtools'
 import type { SpriteCollection } from '../../src/types/types'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Nuxt } from '@nuxt/schema'
+import { addCustomTab } from '@nuxt/devtools-kit'
+
+vi.mock('@nuxt/devtools-kit', () => ({
+  addCustomTab: vi.fn(),
+  extendServerRpc: vi.fn(),
+  onDevToolsInitialized: vi.fn(),
+}))
 
 function makeCollection(name: string, icons: { id: string, componentName: string, absolutePath: string }[]): SpriteCollection {
   return {
@@ -194,5 +208,119 @@ describe('createDevtoolsMiddleware', () => {
     const { req, res } = makeReqRes('/not-a-real-route')
     createDevtoolsMiddleware({ current: [] })(req, res)
     expect(res.statusCode).toBe(404)
+  })
+})
+
+// ─── setupDevtools: vite:serverCreated registration ────────────────────────────
+
+describe('setupDevtools', () => {
+  it('registers the preview middleware only on the client Vite server, not the SSR one', () => {
+    const handlers: ((viteServer: unknown, env: { isClient: boolean, isServer: boolean }) => void)[] = []
+    const fakeNuxt = {
+      options: { app: { baseURL: '/' } },
+      hook: vi.fn((event: string, handler: typeof handlers[number]) => {
+        if (event === 'vite:serverCreated') handlers.push(handler)
+      }),
+    } as unknown as Nuxt
+
+    setupDevtools(fakeNuxt, { current: [] }, new Set(), false)
+
+    expect(handlers).toHaveLength(1)
+    const use = vi.fn()
+    const viteServer = { middlewares: { use } }
+
+    // SSR server first (as Nuxt fires it) — must be a no-op.
+    handlers[0]!(viteServer, { isClient: false, isServer: true })
+    expect(use).not.toHaveBeenCalled()
+
+    // Client server — middleware must be registered exactly once.
+    handlers[0]!(viteServer, { isClient: true, isServer: false })
+    expect(use).toHaveBeenCalledOnce()
+    expect(use).toHaveBeenCalledWith('/__nuxt-svgo-sprite', expect.any(Function))
+  })
+
+  it('joins app.baseURL into both the middleware mount path and the DevTools tab src (item #17)', () => {
+    // Regression: these two (plus the client's own preview-image URLs, covered
+    // separately below) used to be hardcoded to "/__nuxt-svgo-sprite" — fixing only
+    // one under a non-root baseURL would have broken the others.
+    const handlers: ((viteServer: unknown, env: { isClient: boolean, isServer: boolean }) => void)[] = []
+    const fakeNuxt = {
+      options: { app: { baseURL: '/my-app/' } },
+      hook: vi.fn((event: string, handler: typeof handlers[number]) => {
+        if (event === 'vite:serverCreated') handlers.push(handler)
+      }),
+    } as unknown as Nuxt
+
+    setupDevtools(fakeNuxt, { current: [] }, new Set(), false)
+
+    expect(vi.mocked(addCustomTab)).toHaveBeenCalledWith(
+      expect.objectContaining({ view: { type: 'iframe', src: '/my-app/__nuxt-svgo-sprite' } }),
+    )
+
+    const use = vi.fn()
+    handlers[0]!({ middlewares: { use } }, { isClient: true, isServer: false })
+    expect(use).toHaveBeenCalledWith('/my-app/__nuxt-svgo-sprite', expect.any(Function))
+  })
+})
+
+// ─── resolveDevtoolsRoute ─────────────────────────────────────────────────────
+
+describe('resolveDevtoolsRoute', () => {
+  function fakeNuxt(baseURL: string): Nuxt {
+    return { options: { app: { baseURL } } } as unknown as Nuxt
+  }
+
+  it('joins a root baseURL without a double slash', () => {
+    expect(resolveDevtoolsRoute(fakeNuxt('/'), '/__nuxt-svgo-sprite')).toBe('/__nuxt-svgo-sprite')
+  })
+
+  it('joins a non-root baseURL', () => {
+    expect(resolveDevtoolsRoute(fakeNuxt('/my-app'), '/__nuxt-svgo-sprite')).toBe('/my-app/__nuxt-svgo-sprite')
+  })
+
+  it('joins a non-root baseURL with a trailing slash, without a double slash', () => {
+    expect(resolveDevtoolsRoute(fakeNuxt('/my-app/'), '/__nuxt-svgo-sprite')).toBe('/my-app/__nuxt-svgo-sprite')
+  })
+
+  it('falls back to "/" when baseURL is empty', () => {
+    expect(resolveDevtoolsRoute(fakeNuxt(''), '/__nuxt-svgo-sprite')).toBe('/__nuxt-svgo-sprite')
+  })
+})
+
+// ─── createDevtoolsMiddleware: routePath embedded into clientHtml ────────────────
+
+describe('createDevtoolsMiddleware — routePath', () => {
+  it('embeds a non-default routePath into the client shell, for the preview-image URLs', async () => {
+    const { req, res } = (() => {
+      const headers: Record<string, string> = {}
+      const req = { url: '/' } as IncomingMessage
+      const res = {
+        statusCode: 200,
+        setHeader: vi.fn((name: string, value: string) => { headers[name] = value }),
+        end: vi.fn(),
+      } as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> }
+      return { req, res }
+    })()
+
+    createDevtoolsMiddleware({ current: [] }, '/my-app/__nuxt-svgo-sprite')(req, res)
+    await new Promise(r => setTimeout(r, 50))
+
+    const html = res.end.mock.calls[0]?.[0] as string
+    expect(html).toContain('"/my-app/__nuxt-svgo-sprite"')
+  })
+
+  it('defaults to "/__nuxt-svgo-sprite" when routePath is omitted', async () => {
+    const req = { url: '/' } as IncomingMessage
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> }
+
+    createDevtoolsMiddleware({ current: [] })(req, res)
+    await new Promise(r => setTimeout(r, 50))
+
+    const html = res.end.mock.calls[0]?.[0] as string
+    expect(html).toContain('"/__nuxt-svgo-sprite"')
   })
 })

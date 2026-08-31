@@ -18,7 +18,7 @@ Nuxt 3 module that auto-discovers SVG collections from your folder structure, ge
 - **Optional per-icon wrapper components** — `<UseHome />`, `<IconAdminUser />`, etc.
 - **SSR-friendly** — sprites are inlined into the HTML, no layout shift
 - **Nuxt DevTools tab** — browse every discovered collection and icon, with live previews
-- Nuxt 3 / Nuxt 4 compatible
+- Requires Nuxt 4.4.8+
 
 ## Install
 
@@ -169,6 +169,8 @@ svgoSprite: {
 
 Sprites are injected before `#__nuxt` in the rendered HTML, outside Vue's hydration scope — no hydration mismatch, and they persist across SPA navigation without any client-side work.
 
+**Prefer `autoInjectSprite` over manual placement when you can.** A manually-placed sprite component (`<DefaultSprite />` etc.) lives in a regular Vue `<template>`, so it compiles into the client JS bundle for hydration — in addition to being rendered into the SSR HTML. `autoInjectSprite`'s Nitro `render:html` path has no such cost: the sprite is pure server-rendered HTML that Vue's client bundle never sees. Measured on a 120-icon sprite (~16 kB of inline SVG): manual placement added ~17 kB of extra, otherwise-unnecessary JS to the client bundle (~1 kB after gzip — SVG path data compresses well, so the transfer-size cost is smaller than the parse/execute cost) that `autoInjectSprite` avoided entirely. The gap scales with icon count, so it's most worth paying attention to for larger icon sets. Manual placement remains the right choice when you need to control exactly where in the DOM the sprite mounts, or only ever render a sprite conditionally.
+
 When `autoInjectSprite: false` (the default), a dev-mode notice lists the sprite component names you need to add.
 
 ## Nuxt DevTools
@@ -210,6 +212,35 @@ Generated components emit a plain `<svg>` with no injected classes, inline style
 
 All standard SVG presentation attributes (`fill`, `stroke`, `stroke-width`, `color`, etc.) are forwarded directly to the inner `<svg>` element via Vue's `v-bind="$attrs"`.
 
+**`stroke="currentColor"` doing nothing?** That attribute lands on the *wrapping* `<svg>` — if the icon's own paths carry a hardcoded color (`fill="#000"`, `stroke="black"`, common when icons are exported from a design tool), nothing you pass from outside can override it; a literal value on an element always wins over inheritance. Set `normalizeColors: true` to rewrite literal fill/stroke values to `currentColor` at build time, so the icon actually responds to `stroke="currentColor"` / CSS `color`:
+
+```ts
+svgoSprite: {
+  normalizeColors: true,
+  // Optional: keep specific icons (e.g. a colored logo) as-authored
+  normalizeColorsExclude: /^brand-/,
+}
+```
+
+Values that are already dynamic or intentional are left alone: `none`, `currentColor` itself, `transparent`, `inherit`, a `var(...)` custom property, and a `url(#id)` reference into a `<linearGradient>`/`<pattern>` def (rewriting that would break the reference, not recolor anything).
+
+## Tree-shaking unused icons
+
+By default every icon under `inputDir` ships in the inlined sprite, whether or not your app actually references it. Set `treeShaking: true` to scan your source for icon usages and emit only what's found:
+
+```ts
+svgoSprite: {
+  treeShaking: true,
+  // Icons only referenced dynamically (`:name="someVar"`) — invisible to the
+  // literal-string scan below — must be listed here to survive shaking.
+  treeShakingInclude: ['dynamic-only'],
+}
+```
+
+The scan looks for a literal quoted icon id (`<SvgUse name="home">`) or its generated component tag (`<UseHome`/`UseHome`) across `.vue`/`.js`/`.ts` (and your other configured `extensions`) files under `srcDir`. Like `@nuxt/icon`'s `clientBundle.scan` or `unplugin-svg-component`'s `treeShaking`, detection is literal-only — a dynamically-computed name is invisible to it, which is what `treeShakingInclude` is for.
+
+Two things stay unaffected regardless of shaking: generated types and `Use*` components always reflect the **full** discovered icon set, so autocomplete and type-checking never lie about what an icon name resolves to; and shaking only ever runs for `nuxt build`/`nuxt generate` — `nuxt dev` always ships every icon, so nothing can silently vanish mid-development because the scan missed a usage.
+
 ## TypeScript types
 
 The module generates `#build/nuxt-svgo-sprite/icon-names.d.ts` and registers it in your Nuxt `tsconfig` automatically (via `prepare:types`):
@@ -240,6 +271,7 @@ export default defineNuxtConfig({
     componentPrefix: 'Use',
     autoInjectSprite: false,
     svgoConfig: {},
+    treeShaking: false,
   },
 })
 ```
@@ -252,6 +284,11 @@ export default defineNuxtConfig({
 | `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
 | `autoInjectSprite` | `boolean \| string[]` | `false` | Inject sprite(s) into every SSR page automatically. |
 | `svgoConfig` | `SvgoConfig` | internal defaults | When set, `plugins` REPLACES the built-in default plugin list (not merged) — pass the full list you want. Other `SvgoConfig` keys (`multipass`, `floatPrecision`, `js2svg`, ...) are passed straight through. See [SVGO docs](https://svgo.dev) for available plugins. |
+| `sizeLimitKb` | `number` | `undefined` | Warn when the total inlined sprite payload exceeds this size, in KB. Diagnostic only — never fails the build. |
+| `normalizeColors` | `boolean` | `false` | Rewrite literal fill/stroke values to `currentColor` so icons respond to CSS `color`/a `stroke`/`fill` attribute from outside. See [Styling icons](#styling-icons). |
+| `normalizeColorsExclude` | `RegExp` | `undefined` | Icons whose id matches are excluded from `normalizeColors` (e.g. a colored logo). |
+| `treeShaking` | `boolean` | `false` | Emit only icons found by a literal-string source scan. Production builds only, never `nuxt dev`. See [Tree-shaking unused icons](#tree-shaking-unused-icons). |
+| `treeShakingInclude` | `string[]` | `undefined` | Icon ids to always keep when `treeShaking` is enabled, regardless of scan results (e.g. dynamically-bound names). |
 
 ## Migrating from v2
 

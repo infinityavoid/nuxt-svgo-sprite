@@ -47,7 +47,18 @@ export function resolveIconPreviewPath(
   return icon.absolutePath
 }
 
-function clientHtml(): string {
+/**
+ * Joins `path` onto `nuxt.options.app.baseURL`, the same way `@nuxt/devtools` itself
+ * builds its own route paths — the DevTools tab iframe `src`, the middleware mount
+ * path, and the client's own preview-image URLs must all agree on this, or they
+ * silently diverge the moment a host app sets a non-root `baseURL` (e.g. served under
+ * a subpath behind a reverse proxy). Exported for unit testing.
+ */
+export function resolveDevtoolsRoute(nuxt: Nuxt, path: string): string {
+  return `${nuxt.options.app.baseURL || '/'}${path}`.replace(/\/+/g, '/')
+}
+
+function clientHtml(routePath: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -162,6 +173,7 @@ function clientHtml(): string {
   <div id="status">Connecting…</div>
   <div id="app"></div>
   <script>
+    var ROUTE_PATH = ${JSON.stringify(routePath)};
     var rpc = null;
 
     function connectDevtools(fn) {
@@ -197,7 +209,7 @@ function clientHtml(): string {
       }
       app.innerHTML = collections.map(function(col) {
         var icons = col.icons.map(function(icon) {
-          var src = '/__nuxt-svgo-sprite/svg/' + col.name + '/' + icon.id;
+          var src = ROUTE_PATH + '/svg/' + col.name + '/' + icon.id;
           var title = icon.componentName ? esc(icon.componentName) : esc(icon.id);
           return '<div class="icon-card" title="' + title + '">'
             + '<img class="icon-preview" src="' + src + '" alt="' + esc(icon.id) + '" onerror="this.style.opacity=0.2">'
@@ -228,19 +240,21 @@ function clientHtml(): string {
 }
 
 /**
- * Handles one request to the /__nuxt-svgo-sprite middleware: the client HTML shell
- * at "/" and raw SVG previews at "/svg/{collection}/{iconId}". Exported (separately
- * from its registration on the Vite dev server) for unit testing.
+ * Handles one request to the DevTools route (mounted at `routePath`, normally
+ * `/__nuxt-svgo-sprite` — see resolveDevtoolsRoute): the client HTML shell at "/" and
+ * raw SVG previews at "/svg/{collection}/{iconId}". Exported (separately from its
+ * registration on the Vite dev server) for unit testing.
  */
 export function createDevtoolsMiddleware(
   collectionsRef: { current: SpriteCollection[] },
+  routePath = '/__nuxt-svgo-sprite',
 ): (req: IncomingMessage, res: ServerResponse) => void {
   return (req, res) => {
     const url = (req.url ?? '/').split('?')[0] ?? '/'
 
     if (url === '/' || url === '') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
-      res.end(clientHtml())
+      res.end(clientHtml(routePath))
       return
     }
 
@@ -287,11 +301,17 @@ export function setupDevtools(
 ): () => Promise<void> {
   let rpc: BirpcGroup<ClientFunctions, ServerFunctions> | undefined
 
+  // Computed once and reused for the tab iframe src, the middleware mount path, and
+  // (embedded into clientHtml) the client's own preview-image URLs — all three MUST
+  // agree, or they silently diverge under a non-root app.baseURL (item #17). Same
+  // join-and-collapse-slashes pattern @nuxt/devtools itself uses for its own routes.
+  const routePath = resolveDevtoolsRoute(nuxt, '/__nuxt-svgo-sprite')
+
   addCustomTab({
     name: 'nuxt-svgo-sprite',
     title: 'SVG Sprite',
     icon: 'carbon:svg',
-    view: { type: 'iframe', src: '/__nuxt-svgo-sprite' },
+    view: { type: 'iframe', src: routePath },
   })
 
   onDevToolsInitialized(() => {
@@ -304,8 +324,14 @@ export function setupDevtools(
     )
   })
 
-  nuxt.hook('vite:serverCreated', (viteServer) => {
-    viteServer.middlewares.use('/__nuxt-svgo-sprite', createDevtoolsMiddleware(collectionsRef))
+  nuxt.hook('vite:serverCreated', (viteServer, { isClient }) => {
+    // vite:serverCreated fires once per Vite server Nuxt creates — the client build,
+    // the SSR build, and (under experimental.viteEnvironmentApi) potentially a third
+    // — up to 3 times per dev server start. The DevTools preview middleware only
+    // needs to exist on the client server, which is the one that actually serves
+    // browser requests for routePath.
+    if (!isClient) return
+    viteServer.middlewares.use(routePath, createDevtoolsMiddleware(collectionsRef, routePath))
   })
 
   return async () => {

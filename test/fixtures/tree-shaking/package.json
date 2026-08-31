@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "name": "tree-shaking-fixture",
+  "type": "module"
+}

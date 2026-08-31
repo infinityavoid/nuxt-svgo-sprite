@@ -2,7 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { walkInputDir } from '../../src/utils/fs'
+import { walkInputDir, readDirectSvgFiles } from '../../src/utils/fs'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>'
 
@@ -194,5 +194,38 @@ describe('walkInputDir', () => {
     const logger = { warn: vi.fn() }
     await walkInputDir(tmpDir, logger)
     expect(logger.warn).not.toHaveBeenCalled()
+  })
+
+  it('excludes files matched by the isIgnored filter (nuxt.options.ignore parity)', async () => {
+    // Before this, only the dev watcher (chokidar) honored nuxt.options.ignore — the
+    // cold-build walker didn't, so an ignored file built fine once and then silently
+    // never hot-reloaded again with no warning anywhere.
+    const kept = await writeSvg('home.svg')
+    await writeSvg('draft.svg')
+    // isIgnored (Nuxt's createIsIgnored) always receives forward-slash paths,
+    // regardless of platform — match on that form, not on OS-native separators.
+    const isIgnored = (absPath: string) => absPath.endsWith('/draft.svg')
+    const entries = await walkInputDir(tmpDir, undefined, isIgnored)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.files).toEqual([kept])
+  })
+
+  it('an entirely-ignored folder produces no collection at all', async () => {
+    await writeSvg('admin', 'star.svg')
+    const isIgnored = () => true
+    const entries = await walkInputDir(tmpDir, undefined, isIgnored)
+    expect(entries).toHaveLength(0)
+  })
+})
+
+describe('readDirectSvgFiles', () => {
+  it('excludes files matched by the isIgnored filter', async () => {
+    const kept = await writeSvg('home.svg')
+    await writeSvg('draft.svg')
+    // isIgnored (Nuxt's createIsIgnored) always receives forward-slash paths,
+    // regardless of platform — match on that form, not on OS-native separators.
+    const isIgnored = (absPath: string) => absPath.endsWith('/draft.svg')
+    const files = await readDirectSvgFiles(tmpDir, undefined, isIgnored)
+    expect(files).toEqual([kept])
   })
 })

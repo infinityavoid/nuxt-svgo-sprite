@@ -43,9 +43,11 @@ export function findOwningCollection(
 }
 
 /**
- * Processes a single file-change event for a known collection.
- * Logs the ADR-011 unlink warning; always calls onCollectionChange.
- * Exported for unit testing.
+ * Processes a single file-change event for a known collection. Delegates entirely to
+ * onCollectionChange (rebuild.ts), which — since ADR-025 closed ADR-011 — now
+ * actually unregisters a deleted icon's Use* component itself (via
+ * addComponentExports + a filterless updateTemplates()) instead of only being able to
+ * warn that a restart was needed. Exported for unit testing.
  */
 export async function handleWatchEvent(
   event: string,
@@ -54,14 +56,6 @@ export async function handleWatchEvent(
   logger: WatcherLogger,
   onCollectionChange: OnCollectionChange,
 ): Promise<void> {
-  if (event === 'unlink') {
-    const removedIcon = collection.icons.find(i => i.absolutePath === absPath)
-    if (removedIcon) {
-      logger.warn(
-        `Icon "${removedIcon.id}" removed from sprite. Restart dev server to unregister component ${removedIcon.componentName}.`,
-      )
-    }
-  }
   await onCollectionChange(collection, event, absPath)
 }
 
@@ -99,7 +93,14 @@ export function setupWatcher(
   nuxt.hook('builder:watch', async (event, relativePath) => {
     if (!/\.svg$/i.test(relativePath)) return
 
-    const absPath = path.resolve(nuxt.options.rootDir, relativePath)
+    // Nuxt itself always resolves builder:watch's relativePath against srcDir, not
+    // rootDir — confirmed against multiple first-party call sites (the core
+    // components and imports modules). They differ whenever the user configures a
+    // custom srcDir (e.g. `srcDir: 'app'`), which is a supported, documented Nuxt
+    // config — resolving against the wrong base there would silently never match any
+    // real collection. resolve() is safe either way when relativePath happens to
+    // already be absolute (chokidar can emit either form).
+    const absPath = path.resolve(nuxt.options.srcDir, relativePath)
     const collection = findOwningCollection(absPath, collectionsRef.current)
     if (!collection) {
       // Nuxt's builder:watch fires for every changed file under srcDir, not just
@@ -114,7 +115,24 @@ export function setupWatcher(
     }
 
     const handler = handlers.get(collection.name)
-    if (handler) await handler(event, absPath, collection)
+    // Deliberately NOT awaited: hookable calls every builder:watch handler in
+    // sequence, awaiting each before calling the next — awaiting the debounced
+    // handler here (perfect-debounce resolves EVERY call only once the eventual
+    // trailing invocation settles, not just the last one in a burst) blocked Nuxt's
+    // entire builder:watch chain — its own internal handler, every other module's —
+    // for the full debounce delay plus a complete collection rebuild, on every
+    // single .svg save. Safe now that createRebuildHandler does its own filterless
+    // updateTemplates() when a new component needs registering (rebuild.ts) —
+    // correctness no longer depends on Nuxt's own builder:watch handler happening to
+    // run afterward, which is what made the previous awaited version work at all.
+    // Errors are handled inside createRebuildHandler's own try/catch and never
+    // reach here; .catch is defensive against an unexpected rejection reaching this
+    // point unhandled.
+    if (handler) {
+      handler(event, absPath, collection).catch((err: unknown) => {
+        logger.warn(`Unexpected error while rebuilding collection "${collection.name}": ${String(err)}`)
+      })
+    }
   })
 
   return () => {

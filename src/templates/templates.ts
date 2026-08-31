@@ -1,11 +1,58 @@
-import { addTemplate, addComponent } from '@nuxt/kit'
-import type { SpriteCollection, IconMeta } from '../types/types'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { addTemplate, addTypeTemplate, addComponent, addComponentExports, useNuxt } from '@nuxt/kit'
+import type { SpriteCollection } from '../types/types'
 
 export interface TemplateHandles {
   /** Per-collection sprite template filenames, keyed by collection name. */
   spriteTemplateNames: Map<string, string>
   /** Filename of the icon-names.d.ts type declaration (for prepare:types). */
   typeTemplateName: string
+  /**
+   * Absolute path to the Use* components file (ADR-011/-025) — rebuild.ts rewrites
+   * this on every rebuild when createUseComponents is on. Undefined when
+   * createUseComponents is off (nothing to rewrite).
+   */
+  useComponentsFilePath?: string
+}
+
+/**
+ * Generates the content of the single shared Use* components file (ADR-025): one
+ * named export per icon, across every collection, consumed via addComponentExports.
+ * Every icon's export name is unique by construction — componentName is a
+ * deterministic function of the icon id, and ids are already guaranteed globally
+ * unique (collection-builder.ts's collision passes run before this).
+ */
+export function buildUseComponentsFileContent(collections: SpriteCollection[]): string {
+  const lines: string[] = ['import { h, defineComponent } from \'vue\'', '']
+  for (const col of collections) {
+    for (const icon of col.icons) {
+      lines.push(
+        `export const ${icon.componentName} = /* @__PURE__ */ defineComponent({`,
+        `  name: ${JSON.stringify(icon.componentName)},`,
+        `  inheritAttrs: false,`,
+        `  setup(_props, { attrs }) {`,
+        `    return () => h('svg', attrs, [h('use', { href: ${JSON.stringify(`#${icon.id}`)} })])`,
+        `  },`,
+        `})`,
+        '',
+      )
+    }
+  }
+  return lines.join('\n')
+}
+
+/**
+ * Writes the Use* components file synchronously — NOT via addTemplate's own write
+ * cycle, deliberately. addComponentExports's first export-name resolution happens as
+ * part of the very SAME `generateApp` pass that would otherwise write this file (app:
+ * resolve → components:dirs fires BEFORE the template-writing loop that addTemplate
+ * relies on) — by then it would already be too late. The file must exist on disk
+ * before Nuxt's own dev-server bootstrap even starts its first pass.
+ */
+export function writeUseComponentsFileSync(filePath: string, collections: SpriteCollection[]): void {
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  writeFileSync(filePath, buildUseComponentsFileContent(collections), 'utf-8')
 }
 
 /**
@@ -61,6 +108,11 @@ export function setupTemplates(
   options: { createUseComponents?: boolean },
   spriteContents: Map<string, string>,
   getIconTypesContent: () => string,
+  // Read via closure on every components:dirs firing (see the Use* wrapper
+  // components section below) — defaults to the static cold-build snapshot for
+  // callers that never mutate their collections afterward (e.g. the
+  // no-collections-found early-return path in module.ts).
+  getCurrentCollections: () => SpriteCollection[] = () => collections,
 ): TemplateHandles {
   const spriteTemplateNames = new Map<string, string>()
 
@@ -78,8 +130,14 @@ export function setupTemplates(
   }
 
   // ── Type declaration ───────────────────────────────────────────────────────
+  // addTypeTemplate (not addTemplate) also registers the prepare:types push itself —
+  // callers no longer need their own `nuxt.hook('prepare:types', ...)`. It does NOT
+  // remove the `@ts-ignore` in SvgUse.vue's `#build/...` import below: that comment
+  // is for TS module resolution, while addTypeTemplate's `globalTypeFiles` mechanism
+  // (a side effect of this call) is for Vue SFC macro type resolution — different
+  // problems.
   const typeTemplateName = 'nuxt-svgo-sprite/icon-names.d.ts'
-  addTemplate({
+  addTypeTemplate({
     filename: typeTemplateName,
     getContents: getIconTypesContent,
     write: true,
@@ -134,32 +192,38 @@ if (import.meta.dev) {
   })
   addComponent({ name: 'SvgUse', filePath: svgUseTpl.dst })
 
-  // ── Per-icon Use* wrapper components ────────────────────────────────────────
+  // ── Use* wrapper components (ADR-025, closes ADR-011) ───────────────────────
+  // One shared file with a named export per icon, registered ONCE via
+  // addComponentExports rather than one addTemplate+addComponent PER icon (the old
+  // approach). Unlike addComponent, addComponentExports re-reads this file's export
+  // names fresh on every components:dirs firing — rewriting the file to drop a
+  // deleted icon and calling updateTemplates() with no filter (rebuild.ts) actually
+  // unregisters its component. That's the ADR-011 gap ("Kit has no removeComponent
+  // API") this closes: a deleted icon's Use* component no longer needs a dev-server
+  // restart to stop being resolvable.
+  let useComponentsFilePath: string | undefined
   if (options.createUseComponents) {
-    for (const col of collections) {
-      for (const icon of col.icons) {
-        registerUseComponent(icon)
-      }
-    }
+    const nuxt = useNuxt()
+    useComponentsFilePath = path.resolve(nuxt.options.buildDir, 'nuxt-svgo-sprite/use-components.ts')
+
+    const rewrite = () => writeUseComponentsFileSync(useComponentsFilePath!, getCurrentCollections())
+    rewrite()
+
+    // Defensive, not just an optimization: `nuxi prepare` calls clearBuildDir()
+    // AFTER modules' setup() runs but BEFORE the first generateApp pass — wiping the
+    // synchronous write above before addComponentExports's OWN components:dirs
+    // handler ever gets to read it (verified directly: reproduced against mlly in
+    // isolation, then traced to @nuxt/cli's prepare command). Registering OUR OWN
+    // components:dirs listener BEFORE calling addComponentExports (hookable fires
+    // listeners in registration order) means the file gets rewritten fresh on every
+    // firing, including the very first one — regardless of anything that may have
+    // deleted it in between. A plain nuxt dev/build run doesn't hit this ordering
+    // hazard at all (the file survives from the first, synchronous write), so this
+    // is a no-op rewrite of identical content there.
+    nuxt.hook('components:dirs', rewrite)
+
+    addComponentExports({ filePath: useComponentsFilePath })
   }
 
-  return { spriteTemplateNames, typeTemplateName }
-}
-
-/**
- * Registers a single Use* wrapper component.
- * Called during setup (via setupTemplates) and by the watcher on 'add' events.
- */
-export function registerUseComponent(icon: IconMeta): void {
-  const tpl = addTemplate({
-    filename: `nuxt-svgo-sprite/icons/${icon.id}.vue`,
-    // A newline is required between </template> and <script setup> — vue-tsc parses
-    // this file as plain TypeScript when checking the <script> block, and a bare
-    // `</template><script...>` on one line produces a `';' expected` syntax error in
-    // the consumer's typecheck.
-    getContents: () => `<template><svg v-bind="$attrs"><use href="#${icon.id}"/></svg></template>
-<script setup lang="ts">defineOptions({inheritAttrs: false})</script>`,
-    write: true,
-  })
-  addComponent({ name: icon.componentName, filePath: tpl.dst })
+  return { spriteTemplateNames, typeTemplateName, useComponentsFilePath }
 }
