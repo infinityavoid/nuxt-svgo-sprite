@@ -1,6 +1,26 @@
 # Changelog
 
 
+## v3.1.1...3.2.0
+
+[compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v3.1.1...v3.2.0)
+
+### 🚀 Enhancements
+
+- Tree-shaking, layer icon merging, color normalization, and HMR/DevTools fixes ([174c872](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/174c872))
+
+### 🩹 Fixes
+
+- Harden layers, tree-shaking, and color normalization ([eebc6ae](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/eebc6ae))
+
+### 🏡 Chore
+
+- Merge 3.1.1 into main ([a1cfdfb](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/a1cfdfb))
+
+### ❤️ Contributors
+
+- Anton Ustinov <Anton.ustinov02@mail.ru>
+
 ## v3.1.0...3.1.1
 
 [compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v3.1.0...3.1.1)
