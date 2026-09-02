@@ -8,6 +8,7 @@ import {
   writeUseComponentsFileSync,
   setupTemplates,
 } from '../../src/templates/templates'
+import { buildIconMeta, resolveComponentPrefix } from '../../src/utils/icon-meta'
 import type { SpriteCollection } from '../../src/types/types'
 
 const FAKE_BUILD_DIR = path.resolve('/build')
@@ -50,6 +51,7 @@ function makeCol(
     name,
     segments: name === 'default' ? [] : name.split('-'),
     inputDir: `/icons/${name === 'default' ? '' : name}`,
+    sources: [{ dir: `/icons/${name === 'default' ? '' : name}`, label: '(root)' }],
     spriteComponentName: name === 'default' ? 'DefaultSprite' : `${name.charAt(0).toUpperCase() + name.slice(1)}Sprite`,
     typeName,
     icons: ids.map(id => ({
@@ -169,6 +171,31 @@ describe('buildUseComponentsFileContent', () => {
     const content = buildUseComponentsFileContent([])
     expect(content).not.toContain('export const')
   })
+
+  it('an invalid componentPrefix, once resolved via resolveComponentPrefix, can never reach here as a broken identifier', () => {
+    const logger = { warn: vi.fn() }
+    // Exactly the reported case: 'icon-' would otherwise produce `export const
+    // icon-Home = ...`, a syntax error nothing imports directly (so it was never
+    // caught at build time) — resolveComponentPrefix is the single point that
+    // must catch this before buildIconMeta ever derives a componentName from it.
+    const safePrefix = resolveComponentPrefix('icon-', logger)
+    expect(logger.warn).toHaveBeenCalledOnce()
+
+    const meta = buildIconMeta('home.svg', [], '/abs/home.svg', safePrefix)
+    const col: SpriteCollection = {
+      name: 'default',
+      segments: [],
+      inputDir: '/icons',
+      sources: [{ dir: '/icons', label: '(root)' }],
+      spriteComponentName: 'DefaultSprite',
+      typeName: 'DefaultIconName',
+      icons: [meta],
+    }
+    const content = buildUseComponentsFileContent([col])
+    for (const line of content.split('\n').filter(l => l.startsWith('export const'))) {
+      expect(line).toMatch(/^export const [A-Za-z_$][\w$]* = /)
+    }
+  })
 })
 
 describe('writeUseComponentsFileSync', () => {
@@ -186,10 +213,9 @@ describe('writeUseComponentsFileSync', () => {
 
 describe('setupTemplates', () => {
   it('registers the type declaration via addTypeTemplate, not addTemplate — no manual prepare:types wiring needed', () => {
-    // Regression / item #8: addTypeTemplate registers its own prepare:types push
-    // internally (unlike addTemplate); a caller that still used addTemplate here
-    // would need its own nuxt.hook('prepare:types', ...), which is what this
-    // replaced.
+    // addTypeTemplate registers its own prepare:types push internally (unlike
+    // addTemplate); a caller using addTemplate here instead would need its own
+    // nuxt.hook('prepare:types', ...).
     setupTemplates([], {}, new Map(), () => 'export type AllIconName = never\n')
 
     const typeCall = vi.mocked(addTypeTemplate).mock.calls.at(-1)![0] as { filename: string }
@@ -207,7 +233,7 @@ describe('setupTemplates', () => {
     expect(handles.useComponentsFilePath).toBeUndefined()
   })
 
-  it('when createUseComponents is true, writes the shared file synchronously BEFORE registering it via addComponentExports (item #16, ADR-025)', () => {
+  it('when createUseComponents is true, writes the shared file synchronously BEFORE registering it via addComponentExports', () => {
     // Order matters: addComponentExports's first export-name resolution happens
     // during the same generateApp pass — the file must already exist on disk by
     // the time this function returns, not rely on addTemplate's own later write.

@@ -303,7 +303,7 @@ export function setupDevtools(
 
   // Computed once and reused for the tab iframe src, the middleware mount path, and
   // (embedded into clientHtml) the client's own preview-image URLs — all three MUST
-  // agree, or they silently diverge under a non-root app.baseURL (item #17). Same
+  // agree, or they silently diverge under a non-root app.baseURL. Same
   // join-and-collapse-slashes pattern @nuxt/devtools itself uses for its own routes.
   const routePath = resolveDevtoolsRoute(nuxt, '/__nuxt-svgo-sprite')
 

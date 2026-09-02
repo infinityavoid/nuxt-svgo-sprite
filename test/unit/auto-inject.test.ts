@@ -7,6 +7,7 @@ function makeCollection(name: string): SpriteCollection {
     name,
     segments: name === 'default' ? [] : [name],
     inputDir: `/icons/${name}`,
+    sources: [{ dir: `/icons/${name}`, label: '(root)' }],
     spriteComponentName: `${name.charAt(0).toUpperCase() + name.slice(1)}Sprite`,
     typeName: `${name.charAt(0).toUpperCase() + name.slice(1)}IconName`,
     icons: [],

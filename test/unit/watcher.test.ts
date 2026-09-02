@@ -2,7 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { findOwningCollection, handleWatchEvent, setupWatcher } from '../../src/watcher/watcher'
-import type { SpriteCollection } from '../../src/types/types'
+import type { SpriteCollection, CollectionSource } from '../../src/types/types'
 import type { Nuxt } from '@nuxt/schema'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -12,11 +12,13 @@ function makeCollection(
   inputDir: string,
   segments: string[] = [],
   icons: SpriteCollection['icons'] = [],
+  sources?: CollectionSource[],
 ): SpriteCollection {
   return {
     name,
     segments,
     inputDir,
+    sources: sources ?? [{ dir: inputDir, label: '(root)' }],
     spriteComponentName: name === 'default' ? 'DefaultSprite' : `${name.charAt(0).toUpperCase() + name.slice(1)}Sprite`,
     typeName: `${name.charAt(0).toUpperCase() + name.slice(1)}IconName`,
     icons,
@@ -24,6 +26,7 @@ function makeCollection(
 }
 
 const iconRoot = path.join(os.tmpdir(), 'watcher-test-icons')
+const iconRootAsRoots: CollectionSource[] = [{ dir: iconRoot, label: '(root)' }]
 const sep = path.sep
 
 const defaultCol = makeCollection('default', iconRoot, [])
@@ -102,7 +105,7 @@ describe('handleWatchEvent', () => {
     expect(onChange).toHaveBeenCalledWith(adminCol, 'change', '/icons/admin/star.svg')
   })
 
-  it('never logs a warning itself on unlink — that used to be the ADR-011 "restart to unregister" warning, obsolete since ADR-025 (item #16) actually unregisters the component instead', async () => {
+  it('never logs a warning itself on unlink — the component is actually unregistered instead, not just flagged for a restart', async () => {
     const col = makeCollection('admin', '/icons/admin', ['admin'], [
       { id: 'admin-star', componentName: 'UseAdminStar', absolutePath: '/icons/admin/star.svg' },
     ])
@@ -137,7 +140,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
 
     await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'home.svg')))
     await new Promise(r => setTimeout(r, 150))
@@ -149,7 +152,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
 
     // A genuinely new collection folder INSIDE inputDir — this is the case the
     // warning exists for.
@@ -164,7 +167,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
 
     const outsideAbs = path.join(os.tmpdir(), 'completely-outside', 'hero.svg')
     const outsideRel = path.relative(iconRoot, outsideAbs)
@@ -183,7 +186,7 @@ describe('setupWatcher', () => {
     const unrelatedRootDir = path.join(os.tmpdir(), 'unrelated-root-dir-for-srcdir-test')
     const nuxt = makeMockNuxt(unrelatedRootDir, srcDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
 
     const relToSrcDir = path.relative(srcDir, path.join(iconRoot, 'home.svg'))
     await nuxt.triggerWatch('change', relToSrcDir)
@@ -196,7 +199,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
 
     await nuxt.triggerWatch('change', 'assets/icons/readme.md')
     expect(onChange).not.toHaveBeenCalled()
@@ -207,7 +210,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
 
     await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'HOME.SVG')))
     await new Promise(r => setTimeout(r, 150))
@@ -218,7 +221,7 @@ describe('setupWatcher', () => {
     const rootDir = iconRoot
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
 
     await nuxt.triggerWatch('change', path.relative(rootDir, path.join(iconRoot, 'admin', 'star.svg')))
     await new Promise(r => setTimeout(r, 150))
@@ -229,7 +232,7 @@ describe('setupWatcher', () => {
   it('returns a cleanup function that cancels all debounced handlers', () => {
     const nuxt = makeMockNuxt(iconRoot)
     const onChange = vi.fn().mockResolvedValue(undefined)
-    const cleanup = setupWatcher(nuxt, { current: collections }, iconRoot, mockLogger, onChange)
+    const cleanup = setupWatcher(nuxt, { current: collections }, iconRootAsRoots, mockLogger, onChange)
     expect(() => cleanup()).not.toThrow()
   })
 
@@ -238,7 +241,7 @@ describe('setupWatcher', () => {
     const nuxt = makeMockNuxt(rootDir)
     const onChange = vi.fn().mockResolvedValue(undefined)
     const ref = { current: collections }
-    setupWatcher(nuxt, ref, iconRoot, mockLogger, onChange)
+    setupWatcher(nuxt, ref, iconRootAsRoots, mockLogger, onChange)
 
     // Mutate the ref after setup, as a rebuild handler would: admin now has an icon.
     const adminWithIcon = makeCollection('admin', path.join(iconRoot, 'admin'), ['admin'], [
@@ -254,5 +257,104 @@ describe('setupWatcher', () => {
     expect(onChange).toHaveBeenCalledOnce()
     const passedCollection = onChange.mock.calls[0]![0] as SpriteCollection
     expect(passedCollection.icons.map(i => i.id)).toEqual(['admin-star'])
+  })
+})
+
+// ── findOwningCollection — multi-source ─────────────────────────────────────────
+
+describe('findOwningCollection with a multi-source (layer-merged) collection', () => {
+  const layerRoot = path.join(os.tmpdir(), 'watcher-test-layer')
+  const multiSourceDefault = makeCollection('default', iconRoot, [], [], [
+    { dir: iconRoot, label: '(root)' },
+    { dir: layerRoot, label: 'layer "base-layer"' },
+  ])
+  const multiSourceCollections = [multiSourceDefault]
+
+  it('routes a file in the highest-priority (app) source', () => {
+    const result = findOwningCollection(path.join(iconRoot, 'home.svg'), multiSourceCollections)
+    expect(result?.name).toBe('default')
+  })
+
+  it('routes a file in a LOWER-priority (layer) source too, not just the highest-priority one', () => {
+    const result = findOwningCollection(path.join(layerRoot, 'check.svg'), multiSourceCollections)
+    expect(result?.name).toBe('default')
+  })
+
+  it('routes a file in the layer source\'s own default/ merge folder', () => {
+    const result = findOwningCollection(path.join(layerRoot, 'default', 'extra.svg'), multiSourceCollections)
+    expect(result?.name).toBe('default')
+  })
+
+  it('still returns undefined for a file outside every source', () => {
+    const result = findOwningCollection('/totally/different/icon.svg', multiSourceCollections)
+    expect(result).toBeUndefined()
+  })
+})
+
+// ── setupWatcher — multi-root "outside known collections" warning ──────────────
+
+describe('setupWatcher with multiple roots', () => {
+  type MockNuxt = Nuxt & { triggerWatch: (event: string, relativePath: string) => Promise<void> }
+
+  function makeMockNuxt(rootDir: string, srcDir: string = rootDir): MockNuxt {
+    const hookHandlers: Record<string, (event: string, relativePath: string) => Promise<void>> = {}
+    return {
+      options: { rootDir, srcDir },
+      hook: vi.fn((name: string, handler: (event: string, relativePath: string) => Promise<void>) => {
+        hookHandlers[name] = handler
+      }),
+      triggerWatch: async (event: string, relativePath: string) => {
+        await hookHandlers['builder:watch']?.(event, relativePath)
+      },
+    } as unknown as MockNuxt
+  }
+
+  const layerRoot = path.join(os.tmpdir(), 'watcher-test-layer-2')
+  const multiRoots: CollectionSource[] = [
+    { dir: iconRoot, label: '(root)' },
+    { dir: layerRoot, label: 'layer "base-layer"' },
+  ]
+
+  it('warns, labeled with the layer\'s name, for a brand new subfolder under a LAYER root', async () => {
+    const nuxt = makeMockNuxt(layerRoot)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, { current: collections }, multiRoots, mockLogger, onChange)
+
+    const newRel = path.relative(layerRoot, path.join(layerRoot, 'social', 'twitter.svg'))
+    await nuxt.triggerWatch('add', newRel)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(mockLogger.warn).toHaveBeenCalledOnce()
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('layer "base-layer"'))
+  })
+
+  it('still warns for a brand new subfolder under the app root, unprefixed', async () => {
+    const nuxt = makeMockNuxt(iconRoot)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, { current: collections }, multiRoots, mockLogger, onChange)
+
+    const newRel = path.relative(iconRoot, path.join(iconRoot, 'social', 'twitter.svg'))
+    await nuxt.triggerWatch('add', newRel)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(mockLogger.warn).toHaveBeenCalledOnce()
+    expect(mockLogger.warn.mock.calls[0]![0]).not.toContain('layer')
+  })
+
+  it('warns for a new subfolder even when a root dir is passed with forward-slash separators (a kit-resolved layer dir on Windows)', async () => {
+    // resolveLayerInputDirs' outside-srcDir branch returns iconDir as-is — kit's
+    // own resolvePath, forward-slash on Windows — rather than a node-path-built
+    // native-separator string. setupWatcher's own path.normalize() on every root
+    // (not the test's own layerRoot constant) is what must make this match.
+    const forwardSlashRoots: CollectionSource[] = [
+      { dir: layerRoot.replace(/\\/g, '/'), label: 'layer "base-layer"' },
+    ]
+    const nuxt = makeMockNuxt(layerRoot)
+    const onChange = vi.fn().mockResolvedValue(undefined)
+    setupWatcher(nuxt, { current: collections }, forwardSlashRoots, mockLogger, onChange)
+
+    const newRel = path.relative(layerRoot, path.join(layerRoot, 'social', 'twitter.svg'))
+    await nuxt.triggerWatch('add', newRel)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(mockLogger.warn).toHaveBeenCalledOnce()
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('layer "base-layer"'))
   })
 })

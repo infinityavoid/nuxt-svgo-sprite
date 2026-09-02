@@ -56,18 +56,22 @@ export function createRebuildHandler(ctx: RebuildContext) {
 
       // Re-check symbol-id uniqueness against the OTHER live collections — a single-
       // collection rescan can't see this on its own, but a rename that collides with
-      // an icon in another collection is exactly as unsafe here as at cold build
-      // (see buildCollectionsFromDir's global pass 2).
-      const otherIds = new Set(
+      // an icon in another collection is exactly as unsafe here as at cold build.
+      // This can never be a same-collection (layer-shadow) case — `collection.name`
+      // is filtered out below — so unlike collection-builder.ts's cold-build check,
+      // there's no info/warn branch to pick here, only naming which collection
+      // already owns the id.
+      const otherIdOwner = new Map<string, string>(
         ctx.collectionsRef.current
           .filter(c => c.name !== collection.name)
-          .flatMap(c => c.icons.map(i => i.id)),
+          .flatMap(c => c.icons.map(i => [i.id, c.name] as const)),
       )
       const idCollisionFiltered = rescanned.icons.filter((icon) => {
-        if (otherIds.has(icon.id)) {
+        const ownerName = otherIdOwner.get(icon.id)
+        if (ownerName !== undefined) {
           ctx.logger.warn(
             `Symbol id collision: "${icon.id}" in collection "${rescanned.name}" is already used by `
-            + `another collection — skipping "${icon.absolutePath}".`,
+            + `collection "${ownerName}" — skipping "${icon.absolutePath}".`,
           )
           return false
         }
@@ -126,8 +130,7 @@ export function createRebuildHandler(ctx: RebuildContext) {
           // authoritative icon set (ctx.collectionsRef.current already reflects
           // updatedCol, updated above) — addComponentExports re-reads this file's
           // export names fresh on every components:dirs firing, so a dropped export
-          // here genuinely unregisters that icon's component (ADR-025/ADR-011),
-          // not just a warning telling the user to restart.
+          // here genuinely unregisters that icon's component — no restart needed.
           writeUseComponentsFileSync(ctx.handles.useComponentsFilePath, ctx.collectionsRef.current)
           for (const icon of added) ctx.logger.info(`Registered new component <${icon.componentName} />.`)
           for (const icon of removed) ctx.logger.info(`Unregistered component <${icon.componentName} />.`)

@@ -25,6 +25,7 @@ function makeCollection(name: string, icons: { id: string, componentName: string
     name,
     segments: name === 'default' ? [] : [name],
     inputDir: `/icons/${name}`,
+    sources: [{ dir: `/icons/${name}`, label: '(root)' }],
     spriteComponentName: `${name}Sprite`,
     typeName: `${name}IconName`,
     icons,
@@ -168,6 +169,7 @@ describe('createDevtoolsMiddleware', () => {
       name: 'default',
       segments: [],
       inputDir: tmpDir,
+      sources: [{ dir: tmpDir, label: '(root)' }],
       spriteComponentName: 'DefaultSprite',
       typeName: 'DefaultIconName',
       icons: [{ id: 'home', componentName: 'UseHome', absolutePath: filePath }],
@@ -187,6 +189,7 @@ describe('createDevtoolsMiddleware', () => {
       name: 'default',
       segments: [],
       inputDir: tmpDir,
+      sources: [{ dir: tmpDir, label: '(root)' }],
       spriteComponentName: 'DefaultSprite',
       typeName: 'DefaultIconName',
       icons: [{ id: 'home', componentName: 'UseHome', absolutePath: filePath }],
@@ -239,7 +242,7 @@ describe('setupDevtools', () => {
     expect(use).toHaveBeenCalledWith('/__nuxt-svgo-sprite', expect.any(Function))
   })
 
-  it('joins app.baseURL into both the middleware mount path and the DevTools tab src (item #17)', () => {
+  it('joins app.baseURL into both the middleware mount path and the DevTools tab src', () => {
     // Regression: these two (plus the client's own preview-image URLs, covered
     // separately below) used to be hardcoded to "/__nuxt-svgo-sprite" — fixing only
     // one under a non-root baseURL would have broken the others.

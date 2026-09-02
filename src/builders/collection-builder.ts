@@ -8,18 +8,19 @@ import {
   sanitizeSegment,
   sanitizeFilename,
 } from '../utils/icon-meta'
-import type { SpriteCollection, IconMeta } from '../types/types'
+import type { SpriteCollection, IconMeta, CollectionSource } from '../types/types'
 
 export interface CollectionLogger {
   warn(msg: string): void
+  info(msg: string): void
 }
 
 /**
  * Resolves the sanitized filename base for `filename` (accounting for `.raw.svg`),
  * warning when normalization changed it. Returns undefined (and warns) when the base
  * has no usable characters after normalization — e.g. a filename with no ASCII
- * alphanumerics (extends the ADR-014 sanitization-warning policy to filenames, not
- * just folder segments).
+ * alphanumerics (the same sanitization-warning policy folder segments get, applied
+ * to filenames too).
  */
 function resolveFilenameBase(
   filename: string,
@@ -83,12 +84,68 @@ function processFiles(
   return icons
 }
 
-export interface CollectionRoot {
-  /** Absolute directory to walk. */
-  dir: string
-  /** Human-readable origin used in warnings; '(root)' for the app's own inputDir. */
-  label: string
+interface SeenIdOwner {
+  collectionName: string
+  absolutePath: string
 }
+
+/**
+ * Filters `icons` down to those whose `id` isn't already in `seenIds`, dropping each
+ * collision (never both keeping and reporting it) — `seenIds` is MUTATED so the
+ * caller controls the scope: one shared Map across every collection for the
+ * cold-build global pass, a fresh Map per collection for a rebuild's cross-SOURCE
+ * pass (see rebuildSingleCollection). Icons are assumed to already be in priority
+ * order (highest-priority source's icons first), so the earlier occurrence of a
+ * colliding id always wins and its `absolutePath` is what a later message reports as
+ * the winner.
+ *
+ * `seenIds` records WHICH collection an id's first occurrence belongs to
+ * (`SeenIdOwner`, not just a bare id), so a collision is told apart into two
+ * genuinely different situations that need different messages:
+ * - `owner.collectionName === collectionName` — the SAME collection, contributed by
+ *   a DIFFERENT source root (e.g. the app's `close.svg` and a layer's `close.svg`,
+ *   both merged into "default" — see `sources` on `SpriteCollection`). This is an
+ *   intentional, EXPECTED override — shadowing a layer's icon by filename is the
+ *   entire point of layer icon merging — so it's `logger.info`, names both paths,
+ *   and never tells the user to rename anything.
+ * - `owner.collectionName !== collectionName` — a genuinely different collection
+ *   (e.g. `admin/star.svg` vs. root-level `admin-star.svg`) landed on the same
+ *   symbol id by coincidence. This IS almost always a real mistake — kept as
+ *   `logger.warn` with today's "rename the file or its folder" advice, now also
+ *   naming which collection got there first.
+ */
+function filterDuplicateIds(
+  icons: IconMeta[],
+  seenIds: Map<string, SeenIdOwner>,
+  collectionName: string,
+  logger: CollectionLogger,
+): IconMeta[] {
+  return icons.filter((icon) => {
+    const owner = seenIds.get(icon.id)
+    if (owner) {
+      if (owner.collectionName === collectionName) {
+        logger.info(
+          `Icon id "${icon.id}" in collection "${collectionName}" is provided by more than one source — `
+          + `keeping "${owner.absolutePath}" and skipping "${icon.absolutePath}". This is expected when a `
+          + `higher-priority source (your app, or an earlier-extended layer) intentionally overrides a `
+          + `lower-priority layer's icon.`,
+        )
+      }
+      else {
+        logger.warn(
+          `Symbol id collision: "${icon.id}" in collection "${collectionName}" was already used by collection `
+          + `"${owner.collectionName}" ("${owner.absolutePath}"). Skipping "${icon.absolutePath}" — rename the `
+          + `file or its folder.`,
+        )
+      }
+      return false
+    }
+    seenIds.set(icon.id, { collectionName, absolutePath: icon.absolutePath })
+    return true
+  })
+}
+
+export type CollectionRoot = CollectionSource
 
 /**
  * Prefixes a folder's rawPath with its root's label, except for the app's own root
@@ -118,14 +175,17 @@ function describeRawPath(root: CollectionRoot, segments: string[]): string {
  * app's own `admin/` and a layer's `admin/`) has its icons concatenated rather than
  * dropped — that IS the layer-merging feature. A final symbol-id uniqueness pass runs
  * across the merged set, in root-priority order, so a higher-priority root's icon
- * always wins an id collision (ADR-015's "unique by construction" claim doesn't hold
- * in general — e.g. "admin/star.svg" and root-level "admin-star.svg" both derive id
- * "admin-star", and now also a layer's "admin/star.svg" vs. the app's own).
+ * always wins an id collision — symbol ids are NOT unique by construction in general
+ * (e.g. "admin/star.svg" and root-level "admin-star.svg" both derive id "admin-star",
+ * and now also a layer's "admin/star.svg" vs. the app's own).
  *
  * A merged collection's `inputDir` is its highest-priority contributing root's real
- * directory — HMR (setupWatcher/rebuildSingleCollection) only ever re-scans that one
- * directory, so editing a LOWER-priority layer's icons requires a dev server restart
- * to pick up (same documented limitation as adding a brand new collection folder).
+ * directory (kept for messages and the common single-root case), but `sources` holds
+ * EVERY contributing root — `rebuildSingleCollection` re-scans all of them, so
+ * editing icons in any of an app's own folder OR any contributing layer's folder
+ * hot-reloads correctly. Only a brand-new collection FOLDER (one that didn't exist
+ * at cold build, in any root) still requires a dev server restart — that remains a
+ * documented limitation, unrelated to which existing root you edit.
  *
  * No Nuxt dependency — path resolution is the caller's responsibility.
  */
@@ -178,6 +238,7 @@ export async function buildCollectionsFromDir(
           name,
           segments: sanitizedSegments.slice(),
           inputDir: collectionDir,
+          sources: [{ dir: collectionDir, label: root.label }],
           spriteComponentName: deriveSpriteComponentName(name),
           typeName: deriveTypeName(name),
           icons,
@@ -211,32 +272,30 @@ export async function buildCollectionsFromDir(
     perRoot.push(named)
   }
 
-  // Cross-root merge: a collection name seen in more than one root has its icons
-  // concatenated (in root-priority order — roots[0] is highest priority), keeping the
-  // first (highest-priority) root's metadata/inputDir.
+  // Cross-root merge: a collection name seen in more than one root has its icons AND
+  // sources concatenated (in root-priority order — roots[0] is highest priority),
+  // keeping the first (highest-priority) root's metadata/inputDir. `sources` is what
+  // lets rebuildSingleCollection later re-scan EVERY contributing root, not just the
+  // highest-priority one — losing this on the merge would silently drop every
+  // lower-priority root's icons on the collection's first HMR rebuild.
   const merged = new Map<string, SpriteCollection>()
   for (const rootResult of perRoot) {
     for (const { name, collection } of rootResult) {
       const existing = merged.get(name)
-      merged.set(name, existing ? { ...existing, icons: [...existing.icons, ...collection.icons] } : collection)
+      merged.set(name, existing
+        ? { ...existing, icons: [...existing.icons, ...collection.icons], sources: [...existing.sources, ...collection.sources] }
+        : collection)
     }
   }
 
   // Final pass: symbol-id uniqueness across the merged set, in root-priority order.
-  const seenIds = new Set<string>()
+  // One shared Map across every collection here — filterDuplicateIds tells apart a
+  // same-collection (cross-source, e.g. a layer override) collision from a genuine
+  // cross-collection one using each id's recorded owner.
+  const seenIds = new Map<string, SeenIdOwner>()
   const collections: SpriteCollection[] = []
   for (const collection of merged.values()) {
-    const icons = collection.icons.filter((icon) => {
-      if (seenIds.has(icon.id)) {
-        logger.warn(
-          `Symbol id collision: "${icon.id}" in collection "${collection.name}" was already used by another `
-          + `collection. Skipping "${icon.absolutePath}" — rename the file or its folder.`,
-        )
-        return false
-      }
-      seenIds.add(icon.id)
-      return true
-    })
+    const icons = filterDuplicateIds(collection.icons, seenIds, collection.name, logger)
     if (icons.length > 0) collections.push({ ...collection, icons })
   }
 
@@ -244,16 +303,28 @@ export async function buildCollectionsFromDir(
 }
 
 /**
- * Re-scans a single collection's folder and returns an updated SpriteCollection.
- * Used by the watcher rebuild path to avoid re-scanning the entire inputDir tree.
- * Cross-collection id uniqueness (global pass 2 above) is re-checked by the caller
- * against the other live collections — this function only re-derives the local set.
+ * Re-scans EVERY contributing folder of a single collection (`collection.sources`,
+ * highest-priority first) and returns an updated SpriteCollection. Used by the
+ * watcher rebuild path to avoid re-scanning the entire inputDir tree.
  *
- * Reads `collection.inputDir` directly (one level, no recursion) rather than reusing
+ * Rebuilding from `collection.inputDir` alone (the highest-priority source only)
+ * would silently drop every lower-priority source's icons on ANY rebuild of a
+ * collection merged from more than one root — including an edit in the app's own
+ * folder that has nothing to do with the layer contributing the other icons.
+ * Rescanning every source and re-applying the SAME priority order the cold build
+ * uses (a higher-priority source's icon wins an id collision — `filterDuplicateIds`
+ * below) reproduces `buildCollectionsFromDir`'s merge exactly, just scoped to one
+ * collection.
+ *
+ * Cross-COLLECTION id uniqueness (buildCollectionsFromDir's global pass) is
+ * re-checked by the caller (rebuild.ts) against the other live collections — this
+ * function only re-derives one collection's own (possibly multi-source) icon set.
+ *
+ * Reads each source directly (one level, no recursion) rather than reusing
  * `walkInputDir` — that walker's `default/`-prefix-stripping rule is only correct
  * relative to the TRUE inputDir root; applying it to an arbitrary collection subtree
  * would misclassify a nested folder that happens to be named "default" (e.g.
- * `<inputDir>/admin/default/x.svg` rescanned from `admin/` would wrongly look like a
+ * `<source>/admin/default/x.svg` rescanned from `admin/` would wrongly look like a
  * direct file of `admin` instead of the separate `adminDefault` collection a cold
  * build assigns it to).
  */
@@ -263,15 +334,36 @@ export async function rebuildSingleCollection(
   logger: CollectionLogger,
   isIgnored?: IsIgnored,
 ): Promise<SpriteCollection> {
-  const direct = await readDirectSvgFiles(collection.inputDir, logger, isIgnored)
-  // The default collection also merges direct files from an inputDir/default/
-  // subfolder (see utils/fs.ts's walkInputDir merge rule) — mirror that here. No
-  // logger passed: that subfolder not existing is the normal case, not a warning.
-  const files = collection.segments.length === 0
-    ? [...direct, ...(await readDirectSvgFiles(path.join(collection.inputDir, 'default'), undefined, isIgnored))].sort()
-    : direct
+  const perSourceIcons: IconMeta[][] = []
 
-  const icons = processFiles(files, collection.segments, collection.name, componentPrefix, logger)
+  for (const source of collection.sources) {
+    const direct = await readDirectSvgFiles(source.dir, logger, isIgnored)
+    // The default collection also merges direct files from a <source>/default/
+    // subfolder (see utils/fs.ts's walkInputDir merge rule) — mirror that here, for
+    // EVERY source, not just the highest-priority one. No logger passed: that
+    // subfolder not existing is the normal case, not a warning.
+    const files = collection.segments.length === 0
+      ? [...direct, ...(await readDirectSvgFiles(path.join(source.dir, 'default'), undefined, isIgnored))].sort()
+      : direct
+
+    perSourceIcons.push(processFiles(files, collection.segments, collection.name, componentPrefix, logger))
+  }
+
+  // Concatenate in source-priority order, then re-apply the SAME cross-source
+  // id-uniqueness rule the cold build's merge uses: a fresh Map scoped to just this
+  // collection's own sources (NOT shared with other collections — that cross-
+  // collection check is the caller's job, see above), so the highest-priority
+  // source's icon always wins a collision against a lower-priority source's. Every
+  // collision this Map can ever see is by construction same-collection (this Map
+  // never holds any other collection's ids), so filterDuplicateIds always takes its
+  // "expected override" branch here — the right outcome for free, no separate
+  // label needed.
+  const icons = filterDuplicateIds(
+    perSourceIcons.flat(),
+    new Map<string, SeenIdOwner>(),
+    collection.name,
+    logger,
+  )
 
   return { ...collection, icons }
 }

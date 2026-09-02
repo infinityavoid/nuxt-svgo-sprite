@@ -7,20 +7,30 @@ import { buildCollectionsFromDir, rebuildSingleCollection } from '../../src/buil
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>'
 
 let tmpDir: string
+let layerDir: string
 
 beforeEach(async () => {
   tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'svgo-sprite-coll-test-'))
+  layerDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'svgo-sprite-coll-test-layer-'))
 })
 
 afterEach(async () => {
   await fsp.rm(tmpDir, { recursive: true, force: true })
+  await fsp.rm(layerDir, { recursive: true, force: true })
 })
 
-const mockLogger = { warn: vi.fn() }
+const mockLogger = { warn: vi.fn(), info: vi.fn() }
 beforeEach(() => vi.clearAllMocks())
 
 async function writeSvg(...parts: string[]) {
   const filePath = path.join(tmpDir, ...parts)
+  await fsp.mkdir(path.dirname(filePath), { recursive: true })
+  await fsp.writeFile(filePath, SVG, 'utf-8')
+  return filePath
+}
+
+async function writeSvgIn(root: string, ...parts: string[]) {
+  const filePath = path.join(root, ...parts)
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
   await fsp.writeFile(filePath, SVG, 'utf-8')
   return filePath
@@ -254,6 +264,94 @@ describe('buildCollectionsFromDir', () => {
   })
 })
 
+// ── same-collection (cross-root) collision is info, not a false "another collection" warning ──
+
+describe('buildCollectionsFromDir — collision message discrimination', () => {
+  it('cold build, two roots, same id in the SAME collection: an informational shadow message, never "rename"/"another collection"', async () => {
+    await writeSvg('close.svg')
+    await writeSvgIn(layerDir, 'close.svg')
+    const cols = await buildCollectionsFromDir(
+      [{ dir: tmpDir, label: '(root)' }, { dir: layerDir, label: 'layer "base-layer"' }],
+      'Use',
+      mockLogger,
+    )
+
+    const defaultCol = cols.find(c => c.name === 'default')!
+    expect(defaultCol.icons.map(i => i.id)).toEqual(['close'])
+    expect(defaultCol.icons[0]!.absolutePath).toBe(path.join(tmpDir, 'close.svg'))
+
+    expect(mockLogger.warn).not.toHaveBeenCalled()
+    expect(mockLogger.info).toHaveBeenCalledOnce()
+    const [message] = mockLogger.info.mock.calls[0]!
+    // These two negative assertions are the actual regression guard: a same-
+    // collection shadow must never say "another collection" (factually wrong — it's
+    // the SAME collection) or tell the user to rename a file, which would break the
+    // layer-override feature.
+    expect(message).not.toMatch(/rename/i)
+    expect(message).not.toContain('another collection')
+    expect(message).toContain('more than one source')
+  })
+
+  it('cold build, genuinely different collections colliding: still a warning, now naming the owning (winning) collection', async () => {
+    await writeSvg('admin', 'star.svg')
+    await writeSvg('admin-star.svg') // root file, id "admin-star" — collides with admin/star.svg
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+
+    // The root-level "default" collection is processed first (intra-root pass
+    // prioritizes the root's own collection — see buildCollectionsFromDir), so it
+    // wins this collision; "admin"'s star.svg is the one skipped.
+    const defaultCol = cols.find(c => c.name === 'default')!
+    expect(defaultCol.icons.map(i => i.id)).toEqual(['admin-star'])
+    expect(cols.find(c => c.name === 'admin')).toBeUndefined()
+
+    expect(mockLogger.info).not.toHaveBeenCalled()
+    const [message] = mockLogger.warn.mock.calls.find(([m]) => (m as string).includes('Symbol id collision'))!
+    expect(message).toContain('in collection "admin"')
+    expect(message).toContain('used by collection "default"')
+    expect(message).toMatch(/rename/i)
+  })
+
+  it('one build with BOTH a same-collection shadow and a genuine cross-collection clash: exactly one info, exactly one warn', async () => {
+    // Shadowed within "default": app + layer both ship close.svg.
+    await writeSvg('close.svg')
+    await writeSvgIn(layerDir, 'close.svg')
+    // Genuine cross-collection clash, unrelated to layers: admin/star.svg vs root admin-star.svg.
+    await writeSvg('admin', 'star.svg')
+    await writeSvg('admin-star.svg')
+
+    await buildCollectionsFromDir(
+      [{ dir: tmpDir, label: '(root)' }, { dir: layerDir, label: 'layer "base-layer"' }],
+      'Use',
+      mockLogger,
+    )
+
+    expect(mockLogger.info).toHaveBeenCalledOnce()
+    expect(mockLogger.warn).toHaveBeenCalledOnce()
+  })
+
+  it('an id first claimed by collection A does not get treated as a same-collection shadow when a DIFFERENT collection B derives the same id from another root', async () => {
+    // "admin/star.svg" (app root) derives id "admin-star", in collection "admin".
+    // A LAYER-root file "admin-star.svg" at the layer's tree root derives the SAME
+    // id "admin-star", but lands in collection "default" — a genuinely different
+    // collection, contributed by a different root. Must be the cross-collection warn
+    // naming "admin", not the same-collection shadow info, even though both icons
+    // came from different roots (which is what a naive "any cross-root collision is
+    // a shadow" implementation would get wrong).
+    await writeSvg('admin', 'star.svg')
+    await writeSvgIn(layerDir, 'admin-star.svg')
+    await buildCollectionsFromDir(
+      [{ dir: tmpDir, label: '(root)' }, { dir: layerDir, label: 'layer "base-layer"' }],
+      'Use',
+      mockLogger,
+    )
+
+    expect(mockLogger.info).not.toHaveBeenCalled()
+    const [message] = mockLogger.warn.mock.calls.find(([m]) => (m as string).includes('Symbol id collision'))!
+    expect(message).toContain('in collection "default"')
+    expect(message).toContain('used by collection "admin"')
+  })
+})
+
 describe('rebuildSingleCollection', () => {
   it('reflects an added file the same way a cold build would', async () => {
     await writeSvg('admin', 'star.svg')
@@ -317,5 +415,127 @@ describe('rebuildSingleCollection', () => {
 
     await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
     expect(mockLogger.warn).not.toHaveBeenCalled()
+  })
+})
+
+// ── multi-root (layer-merged) collections survive HMR ──────────────────────────
+
+describe('buildCollectionsFromDir with multiple roots — sources tracking', () => {
+  it('a single-root collection has exactly one source, equal to inputDir', async () => {
+    await writeSvg('home.svg')
+    const cols = await buildCollectionsFromDir(tmpDir, 'Use', mockLogger)
+    expect(cols[0]!.sources).toEqual([{ dir: tmpDir, label: '(root)' }])
+  })
+
+  it('cold build over 2 roots: merged collection has both sources, app first', async () => {
+    await writeSvg('home.svg')
+    await writeSvgIn(layerDir, 'check.svg')
+
+    const roots = [
+      { dir: tmpDir, label: '(root)' },
+      { dir: layerDir, label: 'layer "base-layer"' },
+    ]
+    const cols = await buildCollectionsFromDir(roots, 'Use', mockLogger)
+
+    const defaultCol = cols.find(c => c.name === 'default')!
+    expect(defaultCol.sources).toEqual([
+      { dir: tmpDir, label: '(root)' },
+      { dir: layerDir, label: 'layer "base-layer"' },
+    ])
+    expect(defaultCol.inputDir).toBe(tmpDir)
+    expect(defaultCol.icons.map(i => i.id).sort()).toEqual(['check', 'home'])
+  })
+})
+
+describe('rebuildSingleCollection with a multi-source (layer-merged) collection', () => {
+  const roots = () => [
+    { dir: tmpDir, label: '(root)' },
+    { dir: layerDir, label: 'layer "base-layer"' },
+  ]
+
+  it('THE REGRESSION: adding an icon in the APP root does not drop the layer\'s icons', async () => {
+    await writeSvg('home.svg')
+    await writeSvgIn(layerDir, 'check.svg')
+    const cold = await buildCollectionsFromDir(roots(), 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+    expect(defaultCol.icons.map(i => i.id).sort()).toEqual(['check', 'home'])
+
+    // Trigger exactly what the watcher does on an app-folder edit: rebuild the
+    // collection from its own (now multi-source) record — nothing about this edit
+    // touches the layer at all.
+    await writeSvg('star.svg')
+    const rebuilt = await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+
+    expect(rebuilt.icons.map(i => i.id).sort()).toEqual(['check', 'home', 'star'])
+  })
+
+  it('adding an icon in the LOWER-priority (layer) root is picked up on rebuild, not just at cold build', async () => {
+    await writeSvg('home.svg')
+    await writeSvgIn(layerDir, 'check.svg')
+    const cold = await buildCollectionsFromDir(roots(), 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+
+    await writeSvgIn(layerDir, 'bell.svg')
+    const rebuilt = await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+
+    expect(rebuilt.icons.map(i => i.id).sort()).toEqual(['bell', 'check', 'home'])
+  })
+
+  it('both roots shipping the same id: the app\'s wins on rebuild, with an informational shadow message, not a silent duplicate', async () => {
+    await writeSvg('close.svg')
+    await writeSvgIn(layerDir, 'other.svg')
+    const cold = await buildCollectionsFromDir(roots(), 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+
+    // Layer now also ships a "close" icon — collides with the app's. This is the
+    // SAME collection ("default"), just two sources — an expected override, not a
+    // mistake, so it routes to logger.info, not logger.warn.
+    await writeSvgIn(layerDir, 'close.svg')
+    vi.clearAllMocks()
+    const rebuilt = await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+
+    const closeIcons = rebuilt.icons.filter(i => i.id === 'close')
+    expect(closeIcons).toHaveLength(1)
+    expect(closeIcons[0]!.absolutePath).toBe(path.join(tmpDir, 'close.svg'))
+    expect(mockLogger.warn).not.toHaveBeenCalled()
+    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('more than one source'))
+  })
+
+  it('a named collection present in both roots rebuilds with icons from both', async () => {
+    await writeSvg('admin', 'star.svg')
+    await writeSvgIn(layerDir, 'admin', 'shield.svg')
+    const cold = await buildCollectionsFromDir(roots(), 'Use', mockLogger)
+    const adminCol = cold.find(c => c.name === 'admin')!
+    expect(adminCol.icons.map(i => i.id).sort()).toEqual(['admin-shield', 'admin-star'])
+
+    await writeSvg('admin', 'gear.svg')
+    const rebuilt = await rebuildSingleCollection(adminCol, 'Use', mockLogger)
+
+    expect(rebuilt.icons.map(i => i.id).sort()).toEqual(['admin-gear', 'admin-shield', 'admin-star'])
+  })
+
+  it('the default/ merge folder is honored for every source, not just the highest-priority one', async () => {
+    await writeSvg('home.svg')
+    await writeSvgIn(layerDir, 'check.svg')
+    const cold = await buildCollectionsFromDir(roots(), 'Use', mockLogger)
+    const defaultCol = cold.find(c => c.name === 'default')!
+
+    await writeSvgIn(layerDir, 'default', 'extra.svg')
+    const rebuilt = await rebuildSingleCollection(defaultCol, 'Use', mockLogger)
+
+    expect(rebuilt.icons.map(i => i.id).sort()).toEqual(['check', 'extra', 'home'])
+  })
+
+  it('a collection that exists ONLY in the layer still rebuilds correctly from it', async () => {
+    await writeSvg('home.svg')
+    await writeSvgIn(layerDir, 'brand', 'logo.svg')
+    const cold = await buildCollectionsFromDir(roots(), 'Use', mockLogger)
+    const brandCol = cold.find(c => c.name === 'brand')!
+    expect(brandCol.sources).toEqual([{ dir: path.join(layerDir, 'brand'), label: 'layer "base-layer"' }])
+
+    await writeSvgIn(layerDir, 'brand', 'mark.svg')
+    const rebuilt = await rebuildSingleCollection(brandCol, 'Use', mockLogger)
+
+    expect(rebuilt.icons.map(i => i.id).sort()).toEqual(['brand-logo', 'brand-mark'])
   })
 })

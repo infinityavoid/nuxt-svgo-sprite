@@ -2,6 +2,7 @@ import path from 'node:path'
 import { debounce } from 'perfect-debounce'
 import type { Nuxt } from '@nuxt/schema'
 import type { SpriteCollection } from '../types/types'
+import type { CollectionRoot } from '../builders/collection-builder'
 
 export interface WatcherLogger {
   info(msg: string): void
@@ -16,14 +17,16 @@ export type OnCollectionChange = (
 
 /**
  * Returns the collection that owns the given absolute path.
- * A file belongs to a collection only when it sits DIRECTLY inside that collection's
- * own folder (segments are collection boundaries — ADR-002, no namespacing within
- * one collection). A prefix/startsWith match would wrongly route a file in a brand
- * new, not-yet-known subfolder to its nearest ancestor collection (typically
- * "default", since its inputDir is the tree root) instead of correctly reporting no
- * owner. The one exception is the `default/` merge folder (utils/fs.ts): files placed
- * directly in `<inputDir>/default/` belong to the default collection even though its
- * own `inputDir` is the tree root, not `<inputDir>/default`.
+ * A file belongs to a collection only when it sits DIRECTLY inside one of that
+ * collection's own contributing folders (`sources` — a collection merged from an
+ * app root and a Nuxt layer root has more than one), not just its
+ * highest-priority one. A prefix/startsWith match would wrongly route a file in a
+ * brand new, not-yet-known subfolder to its nearest ancestor collection (typically
+ * "default", since one of its sources is the tree root) instead of correctly
+ * reporting no owner. The one exception is the `default/` merge folder (utils/fs.ts):
+ * files placed directly in `<source>/default/` belong to the default collection even
+ * though that source's own dir is the tree root, not `<source>/default` — checked for
+ * every source of the default collection, not just the highest-priority one.
  */
 export function findOwningCollection(
   absPath: string,
@@ -31,11 +34,11 @@ export function findOwningCollection(
 ): SpriteCollection | undefined {
   const dir = path.normalize(path.dirname(absPath))
 
-  const exact = collections.find(c => path.normalize(c.inputDir) === dir)
+  const exact = collections.find(c => c.sources.some(s => path.normalize(s.dir) === dir))
   if (exact) return exact
 
   const defaultCol = collections.find(c => c.segments.length === 0)
-  if (defaultCol && dir === path.normalize(path.join(defaultCol.inputDir, 'default'))) {
+  if (defaultCol && defaultCol.sources.some(s => dir === path.normalize(path.join(s.dir, 'default')))) {
     return defaultCol
   }
 
@@ -44,10 +47,10 @@ export function findOwningCollection(
 
 /**
  * Processes a single file-change event for a known collection. Delegates entirely to
- * onCollectionChange (rebuild.ts), which — since ADR-025 closed ADR-011 — now
- * actually unregisters a deleted icon's Use* component itself (via
- * addComponentExports + a filterless updateTemplates()) instead of only being able to
- * warn that a restart was needed. Exported for unit testing.
+ * onCollectionChange (rebuild.ts), which actually unregisters a deleted icon's
+ * Use* component itself (via addComponentExports + a filterless updateTemplates())
+ * rather than only being able to warn that a restart was needed. Exported for unit
+ * testing.
  */
 export async function handleWatchEvent(
   event: string,
@@ -66,19 +69,25 @@ export async function handleWatchEvent(
  *
  * `collectionsRef` is read live at event time (not just at setup) — a debounced
  * handler that closed over its collection at setup time would keep acting on a
- * stale icon list forever (e.g. ADR-011's delete warning firing from icons that no
- * longer exist), since only `collectionsRef.current` is updated after a rebuild.
+ * stale icon list forever (e.g. reporting icons that no longer exist), since only
+ * `collectionsRef.current` is updated after a rebuild.
  * The set of collection NAMES is still fixed at setup (a genuinely new collection
  * folder requires a restart, by design — see findOwningCollection).
  */
 export function setupWatcher(
   nuxt: Nuxt,
   collectionsRef: { current: SpriteCollection[] },
-  resolvedInputDir: string,
+  roots: CollectionRoot[],
   logger: WatcherLogger,
   onCollectionChange: OnCollectionChange,
 ): () => void {
-  const inputDirPrefix = resolvedInputDir.endsWith(path.sep) ? resolvedInputDir : resolvedInputDir + path.sep
+  // Normalized once, up front: `roots` (module.ts's resolveLayerInputDirs result) can
+  // mix kit-resolved (forward-slash) and node-path-built (native-separator) dirs
+  // depending on which branch produced each entry — path.normalize() converts both
+  // to the current platform's native separator, matching `absPath` below (itself
+  // native via path.resolve), so the prefix comparison can't silently never match on
+  // Windows the way a raw string comparison would.
+  const normalizedRoots = roots.map(r => ({ ...r, dir: path.normalize(r.dir) }))
   const handlers = new Map(
     collectionsRef.current.map(collection => [
       collection.name,
@@ -104,11 +113,19 @@ export function setupWatcher(
     const collection = findOwningCollection(absPath, collectionsRef.current)
     if (!collection) {
       // Nuxt's builder:watch fires for every changed file under srcDir, not just
-      // ones inside our inputDir — an unrelated SVG elsewhere in the project (a
-      // hero image, a component's own asset) must not trigger this warning.
-      if (absPath === resolvedInputDir || absPath.startsWith(inputDirPrefix)) {
+      // ones inside one of our roots — an unrelated SVG elsewhere in the project (a
+      // hero image, a component's own asset) must not trigger this warning. Checked
+      // against EVERY known root (the app's own inputDir plus every contributing
+      // layer's mirrored icon folder — see resolveLayerInputDirs), not just the
+      // app's — a brand-new subfolder under a LAYER's icon folder is exactly as much
+      // "needs a restart" as one under the app's own.
+      const owningRoot = normalizedRoots.find(r =>
+        absPath === r.dir || absPath.startsWith(r.dir + path.sep),
+      )
+      if (owningRoot) {
+        const prefix = owningRoot.label === '(root)' ? '' : `${owningRoot.label}: `
         logger.warn(
-          `SVG changed outside known collections ("${relativePath}"). Restart the dev server to pick up new collections.`,
+          `SVG changed outside known collections (${prefix}"${relativePath}"). Restart the dev server to pick up new collections.`,
         )
       }
       return

@@ -40,6 +40,17 @@ export function toPascalCase(str: string): string {
     .join('')
 }
 
+/**
+ * PascalCase/camelCase → kebab-case ("UseAdminStar" → "use-admin-star"). Byte-for-
+ * byte Vue's own `hyphenate` (`@vue/shared`) — the exact transform Vue/Nuxt use to
+ * resolve a kebab-case template tag back to a registered PascalCase component, so
+ * matching it here (usage-scanner.ts) guarantees recognizing precisely the
+ * kebab forms that actually render, no more and no less.
+ */
+export function toKebabCase(str: string): string {
+  return str.replace(/\B([A-Z])/g, '-$1').toLowerCase()
+}
+
 function toCamelCase(str: string): string {
   const pascal = toPascalCase(str)
   return pascal.charAt(0).toLowerCase() + pascal.slice(1)
@@ -78,6 +89,42 @@ export function deriveTypeName(collectionName: string): string {
  */
 export function deriveSpriteComponentName(collectionName: string): string {
   return ensureValidIdentifierStart(toPascalCase(collectionName)) + 'Sprite'
+}
+
+/**
+ * True when `prefix` contains only identifier-PART characters (letters, digits,
+ * `_`, `$`) — the character class valid ANYWHERE in a JS identifier, not just its
+ * first position. Deliberately NOT the stricter "valid identifier start" rule
+ * (`/^[A-Za-z_$][\w$]*$/`): a leading digit (e.g. `'2fa'`) is already repaired one
+ * layer down by `ensureValidIdentifierStart` on the COMBINED name, so rejecting it
+ * here would break a prefix that actually works today. `''` (empty prefix) is
+ * accepted too — a deliberately supported, already-safe value.
+ */
+export function isValidComponentPrefix(prefix: string): boolean {
+  return /^[\w$]*$/.test(prefix)
+}
+
+/**
+ * `componentPrefix` feeds `buildIconMeta`'s `export const ${componentName} =` line
+ * (templates.ts) as a literal JS identifier — an invalid prefix like `'icon-'` or
+ * `'My Icon'` (both otherwise-plausible choices, since hyphens/spaces work fine for
+ * `id`/collection-name derivation elsewhere in this module) would produce a
+ * syntactically broken generated file. Nothing `import`s that file directly (only
+ * `@nuxt/kit`'s `addComponentExports`, via its own export-name resolution), so the
+ * failure mode is silent: zero working `Use*` components and, if a user then
+ * references one, an unattributable Vite parse error naming no file — hence
+ * validating up front. Called ONCE at setup time (module.ts), before any icon meta
+ * is derived from it — not per-icon, since it's a single config value.
+ */
+export function resolveComponentPrefix(prefix: string, logger: { warn(msg: string): void }): string {
+  if (isValidComponentPrefix(prefix)) return prefix
+  logger.warn(
+    `componentPrefix "${prefix}" contains characters that are not valid in a JavaScript identifier, `
+    + `which would produce a syntactically broken generated component file. Falling back to "Use". `
+    + `Use a PascalCase prefix instead — componentPrefix: 'Icon' gives <IconHome /> (and the kebab form `
+    + `<icon-home />, which Nuxt auto-imports too).`,
+  )
+  return 'Use'
 }
 
 /**

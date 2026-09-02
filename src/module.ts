@@ -4,12 +4,13 @@ import {
   resolvePath,
   createIsIgnored,
 } from '@nuxt/kit'
-import { promises as fs } from 'node:fs'
 import { version } from '../package.json'
 import { buildAllSprites, totalSpriteBytes, type SymbolCache } from './builders/sprite-builder'
 import { buildCollectionsFromDir } from './builders/collection-builder'
 import { scanUsedIconIds } from './builders/usage-scanner'
-import { resolveLayerInputDirs, isOutsideSrcDir } from './utils/layers'
+import { resolveLayerInputDirs, isOutsideSrcDir, resolveScanRoots, resolveWatcherRoots } from './utils/layers'
+import { dirExists } from './utils/fs'
+import { resolveComponentPrefix } from './utils/icon-meta'
 import { setupWatcher } from './watcher/watcher'
 import { buildIconTypesContent, setupTemplates } from './templates/templates'
 import { resolveInjectCollections, setupAutoInject } from './plugins/auto-inject'
@@ -24,12 +25,12 @@ export default defineNuxtModule<ModuleOptions>().with({
     name: 'nuxt-svgo-sprite',
     configKey: 'svgoSprite',
     version,
-    // Matches (not "at least") the @nuxt/kit dependency's own floor below —
-    // see ADR-023. A lower floor here would be an untestable promise: on a host
-    // Nuxt below the version its own @nuxt/kit satisfies our ^ dependency range,
-    // npm/pnpm can't dedupe @nuxt/kit against the host's copy, forcing a second,
-    // separate @nuxt/kit install whose module-level state (e.g. useNuxt()'s
-    // context) isn't shared with the host's own kit-based modules.
+    // Matches (not "at least") the @nuxt/kit dependency's own floor below. A
+    // lower floor here would be an untestable promise: on a host Nuxt below the
+    // version its own @nuxt/kit satisfies our ^ dependency range, npm/pnpm can't
+    // dedupe @nuxt/kit against the host's copy, forcing a second, separate
+    // @nuxt/kit install whose module-level state (e.g. useNuxt()'s context)
+    // isn't shared with the host's own kit-based modules.
     compatibility: { nuxt: '>=4.4.8' },
   },
 
@@ -50,6 +51,10 @@ export default defineNuxtModule<ModuleOptions>().with({
 
   async setup(options, nuxt) {
     const logger = useLogger('nuxt-svgo-sprite')
+    // Validated once, here, before any icon meta is derived from it — an invalid
+    // componentPrefix would otherwise silently generate a syntactically broken
+    // shared components file (see resolveComponentPrefix in utils/icon-meta.ts).
+    const componentPrefix = resolveComponentPrefix(options.componentPrefix, logger)
 
     const iconDir = await resolvePath(options.inputDir, {
       cwd: nuxt.options.srcDir,
@@ -57,16 +62,13 @@ export default defineNuxtModule<ModuleOptions>().with({
       type: 'dir',
     })
 
-    try {
-      await fs.access(iconDir)
-    }
-    catch {
-      // During `nuxt-module-build prepare` the module runs in a synthetic Nuxt context
-      // whose srcDir points to the package root (no icons there). This warning is expected
-      // in that case and does not affect end users.
-      logger.warn(`Input directory "${iconDir}" not found – sprite generation skipped.`)
-      return
-    }
+    // A missing inputDir (the normal state right after installing the module,
+    // before an icon folder exists) and an existing-but-empty one both converge
+    // on the `collections.length === 0` branch below — SvgUse/types register
+    // either way, only the warning wording differs. `iconDirExists` also feeds
+    // `resolveLayerInputDirs` below, so a missing app-side inputDir doesn't
+    // discard a layer's own icons as a side effect.
+    const iconDirExists = await dirExists(iconDir)
 
     // Cold build previously had no notion of nuxt.options.ignore/.nuxtignore at all —
     // only the dev watcher (via chokidar's own ignore list) honored it. An ignored
@@ -87,22 +89,32 @@ export default defineNuxtModule<ModuleOptions>().with({
       nuxt.options.watch.push(iconDir)
     }
 
-    const layerRoots = await resolveLayerInputDirs(nuxt, iconDir)
-    const collections = await buildCollectionsFromDir(
-      layerRoots.length > 1 ? layerRoots : iconDir,
-      options.componentPrefix,
-      logger,
-      isIgnored,
-    )
+    const layerRoots = await resolveLayerInputDirs(nuxt, iconDir, iconDirExists)
+    // layerRoots is [] exactly when iconDirExists is false AND inputDir resolves
+    // outside srcDir (resolveLayerInputDirs' own early-return branch) — every other
+    // "app root missing" case still has layer roots to check, so buildCollectionsFromDir
+    // must still run over them, not be skipped outright.
+    const collections = layerRoots.length > 0
+      ? await buildCollectionsFromDir(layerRoots, componentPrefix, logger, isIgnored)
+      : []
+
+    // setupWatcher gets its OWN root list (always includes the app root, unlike
+    // layerRoots) — see resolveWatcherRoots' own doc comment for why.
+    const watcherRoots = resolveWatcherRoots(iconDir, iconDirExists, layerRoots)
     if (collections.length === 0) {
       // Still register SvgUse and an (empty) icon-names.d.ts rather than fully
-      // bailing — an existing-but-not-yet-populated inputDir is the first thing a
-      // fresh install hits, and README/generated-types usage of `SvgUse`/
-      // `AllIconName` should not error just because no icons exist yet. The watcher
-      // isn't set up here: with zero known collections there's nothing for it to
-      // route events to (a brand-new collection folder needs a restart regardless —
-      // see watcher.ts), so the extra wiring wouldn't do anything useful yet.
-      logger.warn('No SVG icons found in input directory — sprite generation skipped.')
+      // bailing — whether inputDir doesn't exist yet (a fresh install, before any
+      // icons have been added) or exists but is empty, README/generated-types usage
+      // of `SvgUse`/`AllIconName` should not error just because no icons exist yet.
+      // The watcher isn't set up here: with zero known collections there's
+      // nothing for it to route events to (a brand-new collection folder — including
+      // inputDir itself, once created — needs a restart regardless, see watcher.ts),
+      // so the extra wiring wouldn't do anything useful yet.
+      logger.warn(iconDirExists
+        ? 'No SVG icons found in input directory — sprite generation skipped.'
+        : `Input directory "${iconDir}" does not exist yet — sprite generation skipped. `
+          + `<SvgUse> and icon types are still registered; create the folder and restart `
+          + `the dev server to pick up icons.`)
       // setupTemplates uses addTypeTemplate for the .d.ts, which registers the
       // prepare:types push itself — no manual nuxt.hook('prepare:types', ...) needed.
       setupTemplates([], options, new Map(), () => buildIconTypesContent([]))
@@ -122,7 +134,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     // of its collection. No effect on a one-shot production build.
     const symbolCache: SymbolCache = new Map()
 
-    // Item #6: opt-in, production-build-only (nuxt dev never shakes — an icon
+    // Opt-in, production-build-only (nuxt dev never shakes — an icon
     // "disappearing" mid-development because the scanner missed a usage is far
     // harder to notice/debug than the same thing happening in a build you're about
     // to deploy). Narrows only the SPRITE payload this call returns — collections,
@@ -136,7 +148,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     let isIconUsed: ((icon: IconMeta) => boolean) | undefined
     if (options.treeShaking && !nuxt.options.dev) {
       const usedIds = await scanUsedIconIds(
-        nuxt.options.srcDir,
+        resolveScanRoots(nuxt),
         collections,
         nuxt.options.extensions,
         [nuxt.options.buildDir],
@@ -211,11 +223,11 @@ export default defineNuxtModule<ModuleOptions>().with({
     const cleanup = setupWatcher(
       nuxt,
       collectionsRef,
-      iconDir,
+      watcherRoots,
       logger,
       createRebuildHandler({
         options: {
-          componentPrefix: options.componentPrefix,
+          componentPrefix,
           svgoConfig: options.svgoConfig,
           optimizeFiles: options.optimizeFiles,
           createUseComponents: options.createUseComponents,

@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
 import { setup, $fetch } from '@nuxt/test-utils/e2e'
 
-// Real production-build verification for backlog item #6 (tree-shaking). Fixture has
+// Real production-build verification for tree-shaking. Fixture has
 // 4 icons: "home" (referenced via <SvgUse name="home">), "star" (referenced via the
 // generated <UseStar /> component tag), "unused" (never referenced anywhere),
 // "dynamic-only" (never referenced literally either — kept only via
@@ -18,12 +18,16 @@ import { setup, $fetch } from '@nuxt/test-utils/e2e'
 // CLI run on this exact fixture: `.nuxt/nuxt-svgo-sprite/use-components.ts` still
 // exported `UseUnused`, and `icon-names.d.ts` still listed `"unused"`, even though
 // the SSR HTML below never contains `id="unused"`. Not encoded as a standing e2e
-// test here — @nuxt/test-utils' production-build mode nests its buildDir under a
-// randomized, short-lived `.nuxt/test/<id>/` path that doesn't reliably survive long
-// enough to inspect from a test body.
-describe('nuxt-svgo-sprite tree-shaking — production build (item #6)', async () => {
+// test here — kept as a unit-level guarantee (sprite-builder.test.ts) instead.
+describe('nuxt-svgo-sprite tree-shaking — production build', async () => {
   await setup({
     rootDir: fileURLToPath(new URL('./fixtures/tree-shaking', import.meta.url)),
+    // Keeps this suite's build output out of `.nuxt` entirely (`.build-*` is
+    // gitignored) — cheap insurance against `nuxi dev`'s own startup-time
+    // clearBuildDir (test/tree-shaking-dev.test.ts runs concurrently against the
+    // same fixture; unrelated to and much rarer than the teardown race this
+    // fixture split was originally, mistakenly, built to avoid).
+    buildDir: fileURLToPath(new URL('./fixtures/tree-shaking/.build-prod', import.meta.url)),
   })
 
   it('keeps an icon referenced via <SvgUse name="...">', async () => {
@@ -44,5 +48,10 @@ describe('nuxt-svgo-sprite tree-shaking — production build (item #6)', async (
   it('keeps an icon force-included via treeShakingInclude despite no literal reference — the escape hatch for dynamic usages the scan cannot see', async () => {
     const html = await $fetch<string>('/')
     expect(html).toContain('id="dynamic-only"')
+  })
+
+  it('keeps an icon referenced only by its kebab-case auto-import tag (<use-kebab-only />)', async () => {
+    const html = await $fetch<string>('/')
+    expect(html).toContain('id="kebab-only"')
   })
 })

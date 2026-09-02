@@ -9,16 +9,16 @@ export interface TemplateHandles {
   /** Filename of the icon-names.d.ts type declaration (for prepare:types). */
   typeTemplateName: string
   /**
-   * Absolute path to the Use* components file (ADR-011/-025) — rebuild.ts rewrites
-   * this on every rebuild when createUseComponents is on. Undefined when
-   * createUseComponents is off (nothing to rewrite).
+   * Absolute path to the Use* components file — rebuild.ts rewrites this on every
+   * rebuild when createUseComponents is on. Undefined when createUseComponents is
+   * off (nothing to rewrite).
    */
   useComponentsFilePath?: string
 }
 
 /**
- * Generates the content of the single shared Use* components file (ADR-025): one
- * named export per icon, across every collection, consumed via addComponentExports.
+ * Generates the content of the single shared Use* components file: one named
+ * export per icon, across every collection, consumed via addComponentExports.
  * Every icon's export name is unique by construction — componentName is a
  * deterministic function of the icon id, and ids are already guaranteed globally
  * unique (collection-builder.ts's collision passes run before this).
@@ -192,15 +192,14 @@ if (import.meta.dev) {
   })
   addComponent({ name: 'SvgUse', filePath: svgUseTpl.dst })
 
-  // ── Use* wrapper components (ADR-025, closes ADR-011) ───────────────────────
+  // ── Use* wrapper components ──────────────────────────────────────────────────
   // One shared file with a named export per icon, registered ONCE via
-  // addComponentExports rather than one addTemplate+addComponent PER icon (the old
-  // approach). Unlike addComponent, addComponentExports re-reads this file's export
-  // names fresh on every components:dirs firing — rewriting the file to drop a
-  // deleted icon and calling updateTemplates() with no filter (rebuild.ts) actually
-  // unregisters its component. That's the ADR-011 gap ("Kit has no removeComponent
-  // API") this closes: a deleted icon's Use* component no longer needs a dev-server
-  // restart to stop being resolvable.
+  // addComponentExports rather than one addTemplate+addComponent PER icon. Unlike
+  // addComponent, addComponentExports re-reads this file's export names fresh on
+  // every components:dirs firing — rewriting the file to drop a deleted icon and
+  // calling updateTemplates() with no filter (rebuild.ts) actually unregisters its
+  // component: a deleted icon's Use* component doesn't need a dev-server restart to
+  // stop being resolvable (Kit itself has no direct removeComponent API).
   let useComponentsFilePath: string | undefined
   if (options.createUseComponents) {
     const nuxt = useNuxt()

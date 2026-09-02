@@ -4,7 +4,7 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt 3 module that auto-discovers SVG collections from your folder structure, generates one inline SSR sprite per collection, and provides typed icon references.
+Nuxt module that auto-discovers SVG collections from your folder structure, generates one inline SSR sprite per collection, and provides typed icon references.
 
 ## Features
 
@@ -18,7 +18,8 @@ Nuxt 3 module that auto-discovers SVG collections from your folder structure, ge
 - **Optional per-icon wrapper components** — `<UseHome />`, `<IconAdminUser />`, etc.
 - **SSR-friendly** — sprites are inlined into the HTML, no layout shift
 - **Nuxt DevTools tab** — browse every discovered collection and icon, with live previews
-- Requires Nuxt 4.4.8+
+- **[Nuxt layers](#nuxt-layers)** — icons merge automatically from every extended layer
+- **Requires Nuxt 4.4.8+**
 
 ## Install
 
@@ -35,10 +36,10 @@ export default defineNuxtConfig({
 })
 ```
 
-Place your SVG icons under `assets/icons/` (Nuxt 3) or `app/assets/icons/` (Nuxt 4 — its default `srcDir` moved to `app/`):
+Place your SVG icons under `app/assets/icons/` (Nuxt 4's default `srcDir` is `app/`; if you've set a custom `srcDir`, `inputDir` resolves relative to that instead):
 
 ```
-assets/icons/
+app/assets/icons/
   home.svg
   star.svg
   admin/
@@ -61,6 +62,8 @@ Use in your app:
   <SvgUse name="admin-shield" width="24" height="24" />
 </template>
 ```
+
+`SvgUse` and generated types are registered even before this folder exists — installing the module first and adding icons afterward doesn't break anything in between. Creating (or renaming) the folder while `nuxt dev` is already running does need a restart to be picked up, the same as adding any brand-new collection folder.
 
 ## Folder structure → collections
 
@@ -93,6 +96,29 @@ A few more behaviors worth knowing before organizing a large icon set:
 - **Filenames with spaces, capitals, or other non-standard characters** are normalized (`My Icon.svg` → id `my-icon`) with a warning naming the original file — useful to know before naming hundreds of files.
 - **A malformed or empty SVG, or one whose root element isn't `<svg>`,** is logged as an error and excluded from that build — it does not fail the whole sprite, and it does not appear in the generated types or components.
 - `inputDir` also accepts a plain relative path (e.g. `'assets/icons'`, resolved against `srcDir`) — `~` aliases are supported, not required.
+
+## Nuxt layers
+
+Icons merge automatically from every [extended layer](https://nuxt.com/docs/getting-started/layers) — no extra config needed. If a layer mirrors the app's `inputDir` path onto its own `srcDir` (e.g. the app uses `app/assets/icons/` and a layer ships its own `app/assets/icons/`), that layer's icons join the app's collections, following the same folder-based rules described above:
+
+```ts
+// app's nuxt.config.ts
+export default defineNuxtConfig({
+  extends: ['./base-layer'],
+})
+```
+
+```
+app/assets/icons/              base-layer/app/assets/icons/
+  home.svg                       check.svg
+                                  home.svg   ← shadowed, see below
+```
+
+**Override precedence:** the app's own icon always wins a same-id collision against a layer's (and an earlier-extended layer wins over a later one). This is an intentional, expected override — the whole point of shipping icons in a shared layer is that a consuming app can override specific ones — so it's logged for visibility but not as a warning. A collision between two genuinely *different* collections (e.g. a root `admin-star.svg` colliding with `admin/star.svg`) is still warned about as a likely mistake, since that's not what layer overriding looks like.
+
+**HMR:** editing an icon — in the app's own folder or in any contributing layer's folder — hot-reloads correctly while `nuxt dev` is running. A brand-new collection folder (in the app or in a layer) still needs a dev-server restart to be picked up, same as any new top-level `inputDir` subfolder.
+
+**Tree-shaking** (if enabled) also scans every layer's own source files, not just the app's — an icon referenced only from a layer's own component is still correctly detected as used. See [Tree-shaking unused icons](#tree-shaking-unused-icons).
 
 ## Components
 
@@ -224,6 +250,10 @@ svgoSprite: {
 
 Values that are already dynamic or intentional are left alone: `none`, `currentColor` itself, `transparent`, `inherit`, a `var(...)` custom property, and a `url(#id)` reference into a `<linearGradient>`/`<pattern>` def (rewriting that would break the reference, not recolor anything).
 
+This covers a literal `fill`/`stroke` **attribute** (`fill="#000"`, `stroke="black"`) and a color set via a `<style>` block + `class` (common in Illustrator/Inkscape "Internal CSS" exports) — both on the optimized path (`optimizeFiles: true`, the default). On the raw path (`optimizeFiles: false` or a `.raw.svg` file), only the attribute form is normalized; a `<style>`/class-based color is left as-authored.
+
+To reach the `<style>`+class case, `normalizeColors: true` also converts **every** `style=""` property on an icon back into a plain attribute (not just `fill`/`stroke`), and drops any `!important` — inert here regardless, since nothing outside the sprite's own inlined markup can out-specificity it. If an icon relies on `style=""` for something other than color, this is worth knowing before turning the option on.
+
 ## Tree-shaking unused icons
 
 By default every icon under `inputDir` ships in the inlined sprite, whether or not your app actually references it. Set `treeShaking: true` to scan your source for icon usages and emit only what's found:
@@ -237,7 +267,7 @@ svgoSprite: {
 }
 ```
 
-The scan looks for a literal quoted icon id (`<SvgUse name="home">`) or its generated component tag (`<UseHome`/`UseHome`) across `.vue`/`.js`/`.ts` (and your other configured `extensions`) files under `srcDir`. Like `@nuxt/icon`'s `clientBundle.scan` or `unplugin-svg-component`'s `treeShaking`, detection is literal-only — a dynamically-computed name is invisible to it, which is what `treeShakingInclude` is for.
+The scan looks for a literal quoted icon id (`<SvgUse name="home">`), its generated component tag (`<UseHome`/`UseHome`), or that same component's kebab-case auto-import form (`<use-home`/`'use-home'`) — including Nuxt's `Lazy`/`lazy-` hydration variant of any of these — across `.vue`/`.js`/`.ts` (and your other configured `extensions`) files under `srcDir`, `shared/`, and `server/` — and, when you [extend other layers](https://nuxt.com/docs/getting-started/layers), each layer's own equivalent directories too, so an icon referenced only from a layer's own component is still detected as used. Like `@nuxt/icon`'s `clientBundle.scan` or `unplugin-svg-component`'s `treeShaking`, detection is literal-only — a dynamically-computed name is invisible to it, which is what `treeShakingInclude` is for.
 
 Two things stay unaffected regardless of shaking: generated types and `Use*` components always reflect the **full** discovered icon set, so autocomplete and type-checking never lie about what an icon name resolves to; and shaking only ever runs for `nuxt build`/`nuxt generate` — `nuxt dev` always ships every icon, so nothing can silently vanish mid-development because the scan missed a usage.
 
@@ -281,7 +311,7 @@ export default defineNuxtConfig({
 | `inputDir` | `string` | `'~/assets/icons'` | Root folder scanned for SVG files. `~` aliases are supported. |
 | `optimizeFiles` | `boolean` | `true` | Pass each SVG through SVGO before adding it to the sprite. Set `false` to skip optimization globally. |
 | `createUseComponents` | `boolean` | `false` | Generate a wrapper component per icon. |
-| `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. |
+| `componentPrefix` | `string` | `'Use'` | Prefix for generated wrapper components. Must contain only letters, digits, `_`, or `$` (a valid JS identifier part) — an invalid value warns and falls back to `'Use'`. |
 | `autoInjectSprite` | `boolean \| string[]` | `false` | Inject sprite(s) into every SSR page automatically. |
 | `svgoConfig` | `SvgoConfig` | internal defaults | When set, `plugins` REPLACES the built-in default plugin list (not merged) — pass the full list you want. Other `SvgoConfig` keys (`multipass`, `floatPrecision`, `js2svg`, ...) are passed straight through. See [SVGO docs](https://svgo.dev) for available plugins. |
 | `sizeLimitKb` | `number` | `undefined` | Warn when the total inlined sprite payload exceeds this size, in KB. Diagnostic only — never fails the build. |

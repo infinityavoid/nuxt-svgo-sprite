@@ -11,13 +11,29 @@ export interface IconMeta {
   raw?: boolean
 }
 
+export interface CollectionSource {
+  /** absolute path to ONE physical folder feeding this collection */
+  dir: string
+  /** origin label of the root this dir came from: '(root)' or 'layer "base-layer"' */
+  label: string
+}
+
 export interface SpriteCollection {
   /** camelCase name, e.g. "adminButtons" (or "default") */
   name: string
   /** folder path segments from inputDir root, e.g. ["admin", "buttons"] */
   segments: string[]
-  /** absolute path to this collection's folder */
+  /** absolute path to this collection's folder — always === sources[0].dir */
   inputDir: string
+  /**
+   * Every physical folder contributing to this collection, HIGHEST-PRIORITY FIRST
+   * (roots[0]'s icons win an id collision against a lower-priority source's — see
+   * buildCollectionsFromDir). Length is always >= 1. A collection merged from an app
+   * root and a Nuxt layer root has more than one entry here — that is what lets an
+   * HMR rebuild (rebuildSingleCollection) re-scan EVERY contributing folder instead
+   * of silently losing every lower-priority source's icons on the first rebuild.
+   */
+  sources: CollectionSource[]
   /** sprite component name, e.g. "AdminButtonsSprite" (or "DefaultSprite" for default) */
   spriteComponentName: string
   /** TypeScript type name, e.g. "AdminButtonsIconName" (or "DefaultIconName") */

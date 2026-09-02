@@ -264,9 +264,28 @@ export interface ColorNormalizationOptions {
   normalize: boolean
   /**
    * Icons whose id matches are left untouched — for icons that intentionally keep
-   * multi-color fills (e.g. a colored logo). Tested against `icon.id`.
+   * multi-color fills (e.g. a colored logo). Tested against `icon.id`. A `g`/`y`
+   * flag on this RegExp is neutralized internally (see `makeExcludeMatcher`) — the
+   * caller's own RegExp object is never mutated and never reused statefully.
    */
   exclude?: RegExp
+}
+
+// RegExp#test on a `g`- or `y`-flagged pattern is STATEFUL — it advances
+// `lastIndex` on a match and resumes from there next call. buildIconConfig is
+// called once per icon, all sharing the SAME `colorOptions.exclude` object
+// (module.ts constructs it once; buildSprite forwards it unchanged across every
+// icon, every collection, and every HMR rebuild) — so a `/g`/`/y` exclude pattern
+// would produce alternating true/false results across icons that should all match
+// identically. Builds ONE stateless copy (flags stripped of g/y only — i/m/s/u/v/d
+// are preserved) up front, reused for every `.test()` call; `undefined` short-
+// circuits to a matcher that never excludes.
+function makeExcludeMatcher(exclude: RegExp | undefined): (id: string) => boolean {
+  if (!exclude) return () => false
+  const stateless = /[gy]/.test(exclude.flags)
+    ? new RegExp(exclude.source, exclude.flags.replace(/[gy]/g, ''))
+    : exclude
+  return id => stateless.test(id)
 }
 
 function buildIconConfig(
@@ -274,16 +293,26 @@ function buildIconConfig(
   spriteName: string,
   icon: IconMeta,
   optimizeFiles: boolean,
-  colorOptions?: ColorNormalizationOptions,
+  shouldNormalizeColors: boolean,
 ): SvgoConfig {
   const skipOptimization = !optimizeFiles || icon.raw === true
   const optimizationPlugins = skipOptimization
     ? []
     : (userSvgoConfig?.plugins ?? defaultSvgoConfig.plugins ?? [])
-  const shouldNormalizeColors = colorOptions?.normalize === true && !colorOptions.exclude?.test(icon.id)
+  // A pre-optimization normalize pass is required too, not just the post-optimization
+  // one below. preset-default's removeUnknownsAndDefaults strips a
+  // literal fill/stroke value that equals that attribute's SVG-spec INITIAL value
+  // (fill defaults to black) as a redundant "default attribute" — verified live: a
+  // plain fill="#000000" survives with removeUselessStrokeAndFill disabled, but is
+  // gone with only removeUnknownsAndDefaults's defaultAttrs enabled. Rewriting to
+  // currentColor BEFORE that plugin runs makes it a non-default value the optimizer
+  // has no reason to touch. Only guarded (not the whole structural block) — moving
+  // convertToSymbol/inlineDefs/prefixIds earlier breaks the pipeline (see below).
+  const guardOptimizer = shouldNormalizeColors && !skipOptimization
   return {
     ...userSvgoConfig,
     plugins: [
+      ...(guardOptimizer ? [makeNormalizeColorsPlugin()] : []),
       ...optimizationPlugins,
       // Structural plugins below always run, independent of optimizeFiles/raw and of
       // the user's svgoConfig — they are not "optimization", they are invariants the
@@ -297,10 +326,24 @@ function buildIconConfig(
       // optimization list above, not this structural block).
       { name: 'removeScripts' },
       makeInlineDefsPlugin(),
+      // preset-default's inlineStyles (strengthened above with
+      // onlyMatchedOnce: false) converts a <style>+class color into a style="" VALUE,
+      // which makeNormalizeColorsPlugin below never sees — it only reads the fill/
+      // stroke ATTRIBUTES. convertStyleToAttrs (a real, un-deprecated SVGO plugin,
+      // NOT part of preset-default) converts style="" properties back to attributes,
+      // making the post-pass below see them. Guarded the same way as the pre-pass:
+      // never runs when normalizeColors is off (byte-identical plugin list to
+      // before), and never on the raw/optimizeFiles:false path (.raw.svg means "ship
+      // my markup as authored" — this rewrites every style="" property, not just
+      // fill/stroke, and drops `!important`, more restructuring than that contract
+      // allows; normalizeColors handles attributes only on the raw path).
+      ...(guardOptimizer ? [{ name: 'convertStyleToAttrs' }] : []),
       // Opt-in (colorOptions.normalize, default false) — kept in the structural
       // block rather than defaultSvgoConfig so it still applies when the user sets
-      // their own svgoConfig (which replaces the optimization list, not this block —
-      // see ADR-021).
+      // their own svgoConfig (which replaces the optimization list, not this block).
+      // Also the ONLY normalize pass on the raw path (guardOptimizer is always false
+      // there), and the pass that catches a non-black literal color the pre-pass
+      // above didn't need to touch.
       ...(shouldNormalizeColors ? [makeNormalizeColorsPlugin()] : []),
       {
         name: 'prefixIds',
@@ -472,6 +515,9 @@ export async function buildSprite(
 
   const symbols: string[] = []
   let succeededCount = 0
+  // Built ONCE per buildSprite call — not per icon — so a /g or /y flagged
+  // colorOptions.exclude never accumulates lastIndex state across icons.
+  const isColorExcluded = makeExcludeMatcher(colorOptions?.exclude)
 
   // Read every icon file concurrently (I/O-bound, independent of each other) instead
   // of one at a time — Promise.all preserves array order regardless of completion
@@ -546,7 +592,8 @@ export async function buildSprite(
     const input = ensureViewBox(raw)
     const missingDimensions = !hasViewBox && input === raw
 
-    const config = buildIconConfig(svgoConfig, spriteName, icon, optimizeFiles, colorOptions)
+    const shouldNormalizeColors = colorOptions?.normalize === true && !isColorExcluded(icon.id)
+    const config = buildIconConfig(svgoConfig, spriteName, icon, optimizeFiles, shouldNormalizeColors)
     // Only meaningful on the raw path — on the optimized path inlineStyles already
     // removes <style> blocks entirely, so there is nothing left to leak.
     const skipsOptimization = !optimizeFiles || icon.raw === true

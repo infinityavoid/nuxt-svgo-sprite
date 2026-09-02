@@ -414,7 +414,7 @@ describe('prefixClassNames — conditional on whether a <style> block can surviv
   })
 })
 
-describe('raw path: unscoped <style> selector leaks page-wide (item #12)', () => {
+describe('raw path: unscoped <style> selector leaks page-wide', () => {
   it('an element-selector rule survives verbatim into the sprite — documents the known limitation', async () => {
     // Verified directly against real SVGO: on the raw/optimizeFiles:false path,
     // optimizationPlugins is empty, so nothing removes or scopes this rule. Once the
@@ -619,7 +619,7 @@ describe('totalSpriteBytes', () => {
   })
 })
 
-// ─── normalizeColors (item #7) ───────────────────────────────────────────────────
+// ─── normalizeColors ──────────────────────────────────────────────────────────────
 
 describe('normalizeColors', () => {
   it('off by default: a literal fill/stroke color is left untouched', async () => {
@@ -688,16 +688,177 @@ describe('normalizeColors', () => {
     expect(sprite).toContain('fill="currentColor"')
   })
 
-  it('applies even when the user supplies their own svgoConfig (structural block survives replacement — ADR-021)', async () => {
+  it('applies even when the user supplies their own svgoConfig (structural block survives replacement)', async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M1 1h9"/></svg>'
     const icon = await makeIconWithContent('user-config-normalize', svg)
     const userConfig: Parameters<typeof buildSprite>[1] = { plugins: ['preset-default'] }
     const sprite = await buildSprite([icon], userConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
     expect(sprite).toContain('fill="currentColor"')
   })
+
+  // preset-default's removeUnknownsAndDefaults strips a literal fill/stroke value
+  // equal to that attribute's SVG-spec INITIAL value (black is fill's default) as a
+  // "default attribute" — an additional pre-optimization normalize pass
+  // (buildIconConfig's guardOptimizer block) runs first so fill="#000" and
+  // equivalents are rewritten to currentColor before that stripping happens.
+
+  it('rewrites a literal BLACK fill attribute to currentColor (removeUnknownsAndDefaults would otherwise strip it as a "default" value)', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="M1 1h9"/></svg>'
+    const icon = await makeIconWithContent('black-fill', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
+    expect(sprite).toMatch(/<path[^>]*fill="currentColor"/)
+  })
+
+  it('rewrites the word form "black" the same way (goes through SVGO\'s own color-minification first)', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="black" d="M1 1h9"/></svg>'
+    const icon = await makeIconWithContent('black-word-fill', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
+    expect(sprite).toMatch(/<path[^>]*fill="currentColor"/)
+  })
+
+  it('rewrites a black fill on the ROOT <svg> element too, not just a child path', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#000"><path d="M1 1h9"/></svg>'
+    const icon = await makeIconWithContent('black-root-fill', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
+    expect(sprite).toMatch(/<symbol[^>]*fill="currentColor"/)
+  })
+
+  it('a black STROKE is never rewritten (stroke\'s initial value is "none", not black, so it never matches the guardOptimizer pass)', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path stroke="#000" d="M1 1h9"/></svg>'
+    const icon = await makeIconWithContent('black-stroke', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
+    expect(sprite).toMatch(/<path[^>]*stroke="currentColor"/)
+  })
+
+  // preset-default's inlineStyles (strengthened with onlyMatchedOnce: false)
+  // converts a <style>+class color into a style="" VALUE, which the normalize pass
+  // never reads (it only looks at fill/stroke ATTRIBUTES) — SVGO's own
+  // convertStyleToAttrs plugin runs before the post-optimization normalize pass to
+  // convert style="" properties back to attributes first.
+
+  it('rewrites a <style>+class color (inlineStyles turns this into style="fill:...") to a currentColor attribute', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><style>.a{fill:#f00}</style>'
+      + '<rect class="a" x="0" y="0" width="1" height="1"/><rect class="a" x="2" y="2" width="1" height="1"/></svg>'
+    const icon = await makeIconWithContent('style-class-fill', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
+    expect(sprite).toContain('fill="currentColor"')
+    // Only the SYMBOL content must be free of a lingering style="" color — the
+    // sprite wrapper <svg> itself legitimately carries its own visually-hidden
+    // style="position: absolute; ..." attribute, unrelated to icon content.
+    expect(sprite).not.toContain('style="fill')
+  })
+
+  it('a <style>+class BLACK color is rewritten too (both the guardOptimizer pass and convertStyleToAttrs must fire together)', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><style>.a{fill:#000}</style>'
+      + '<rect class="a" x="0" y="0" width="1" height="1"/></svg>'
+    const icon = await makeIconWithContent('style-class-black-fill', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
+    expect(sprite).toContain('fill="currentColor"')
+    expect(sprite).not.toContain('style="fill')
+  })
+
+  // ── Guards: the two new passes must be byte-identical no-ops whenever
+  // normalizeColors doesn't apply — off entirely, or excluded by id.
+
+  it('guard: with normalizeColors OFF, a black fill keeps today\'s (smaller) optimized output — no currentColor introduced', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="M1 1h9"/></svg>'
+    const icon = await makeIconWithContent('black-fill-off', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).not.toContain('currentColor')
+  })
+
+  it('guard: with normalizeColors OFF, a <style>+class color is left as SVGO\'s own style="" output — convertStyleToAttrs is not inserted', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><style>.a{fill:#f00}</style><rect class="a" x="0" y="0" width="1" height="1"/><rect class="a" x="2" y="2" width="1" height="1"/></svg>'
+    const icon = await makeIconWithContent('style-class-off', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger)
+    expect(sprite).toContain('style="fill:red"')
+  })
+
+  it('guard: an excluded icon with a black fill is untouched by the new pre-pass too', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="M1 1h9"/></svg>'
+    const icon = await makeIconWithContent('brand-black', svg)
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, {
+      normalize: true,
+      exclude: /^brand-/,
+    })
+    expect(sprite).not.toContain('currentColor')
+  })
+
+  it('documents the raw-path gap: a raw icon\'s <style>+class color is NOT converted (convertStyleToAttrs never runs on the raw path — it would restructure markup .raw.svg exists to preserve verbatim)', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><style>.a{fill:#f00}</style><rect class="a" x="0" y="0" width="1" height="1"/></svg>'
+    const icon: IconMeta = { ...(await makeIconWithContent('raw-style-class', svg)), raw: true }
+    const sprite = await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true })
+    expect(sprite).not.toContain('currentColor')
+  })
+
+  // normalizeColorsExclude with a /g or /y flag is stateful RegExp#test —
+  // buildIconConfig is called once per icon, all sharing the SAME exclude RegExp
+  // object, so a /g-flagged pattern must not be allowed to advance lastIndex and
+  // alternate true/false across icons that should all match identically.
+
+  it('a /g-flagged exclude excludes EVERY matching icon, not every other one', async () => {
+    const svg = (id: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M1 1h9"/><!--${id}--></svg>`
+    const icons = await Promise.all([
+      makeIconWithContent('brand-a', svg('brand-a')),
+      makeIconWithContent('brand-b', svg('brand-b')),
+      makeIconWithContent('brand-c', svg('brand-c')),
+    ])
+    const sprite = await buildSprite(icons, defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, {
+      normalize: true,
+      exclude: /brand/g,
+    })
+    expect(sprite).not.toContain('currentColor')
+    expect((sprite.match(/<symbol/g) ?? [])).toHaveLength(3)
+  })
+
+  it('a /g-flagged exclude still normalizes every NON-matching icon', async () => {
+    const svg = (id: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M1 1h9"/><!--${id}--></svg>`
+    const icons = await Promise.all([
+      makeIconWithContent('plain-a', svg('plain-a')),
+      makeIconWithContent('plain-b', svg('plain-b')),
+      makeIconWithContent('plain-c', svg('plain-c')),
+    ])
+    const sprite = await buildSprite(icons, defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, {
+      normalize: true,
+      exclude: /^brand-/g,
+    })
+    expect((sprite.match(/fill="currentColor"/g) ?? [])).toHaveLength(3)
+  })
+
+  it('exclusion state does not leak across separate buildSprite calls sharing one RegExp (collections / HMR rebuilds)', async () => {
+    const ex = /^brand-/g
+    const iconA = await makeIconWithContent('brand-a', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M1 1h9"/></svg>')
+    const iconB = await makeIconWithContent('brand-b', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M2 2h9"/></svg>')
+
+    const spriteA = await buildSprite([iconA], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true, exclude: ex })
+    const spriteB = await buildSprite([iconB], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true, exclude: ex })
+
+    expect(spriteA).not.toContain('currentColor')
+    expect(spriteB).not.toContain('currentColor')
+  })
+
+  it('a sticky (/y) exclude behaves identically to /g', async () => {
+    const svg = (id: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M1 1h9"/><!--${id}--></svg>`
+    const icons = await Promise.all([
+      makeIconWithContent('brand-a', svg('brand-a')),
+      makeIconWithContent('brand-b', svg('brand-b')),
+    ])
+    const sprite = await buildSprite(icons, defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, {
+      normalize: true,
+      exclude: /^brand-/y,
+    })
+    expect(sprite).not.toContain('currentColor')
+  })
+
+  it('the caller\'s RegExp object is never mutated (lastIndex stays 0 after a build)', async () => {
+    const ex = /brand/g
+    const icon = await makeIconWithContent('brand-a', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M1 1h9"/></svg>')
+    await buildSprite([icon], defaultSvgoConfig, true, mockLogger, 'default', undefined, undefined, { normalize: true, exclude: ex })
+    expect(ex.lastIndex).toBe(0)
+  })
 })
 
-// ─── isUsed (item #6, tree-shaking) ───────────────────────────────────────────────
+// ─── isUsed (tree-shaking) ──────────────────────────────────────────────────────
 
 describe('isUsed', () => {
   it('every icon is included when isUsed is undefined (default, fully backward compatible)', async () => {

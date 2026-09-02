@@ -37,6 +37,7 @@ function makeCollection(name: string, inputDir: string, icons: SpriteCollection[
     name,
     segments: name === 'default' ? [] : [name],
     inputDir,
+    sources: [{ dir: inputDir, label: '(root)' }],
     spriteComponentName: `${name.charAt(0).toUpperCase() + name.slice(1)}Sprite`,
     typeName: `${name.charAt(0).toUpperCase() + name.slice(1)}IconName`,
     icons,
@@ -243,7 +244,7 @@ describe('createRebuildHandler', () => {
     expect(writeUseComponentsFileSync).toHaveBeenCalledWith(USE_COMPONENTS_FILE_PATH, ctx.collectionsRef.current)
   })
 
-  it('on unlink with createUseComponents: true, rewrites the file WITHOUT the removed icon and logs the unregistration — no restart needed (closes ADR-011)', async () => {
+  it('on unlink with createUseComponents: true, rewrites the file WITHOUT the removed icon and logs the unregistration — no restart needed', async () => {
     const survivorIcon = { id: 'star', componentName: 'UseStar', absolutePath: '/icons/star.svg' }
     const removedIcon = { id: 'home', componentName: 'UseHome', absolutePath: '/icons/home.svg' }
     const preRebuildCol = makeCollection('default', '/icons', [survivorIcon, removedIcon])
@@ -340,7 +341,7 @@ describe('createRebuildHandler', () => {
     )
   })
 
-  it('drops a rescanned icon whose id collides with another live collection, and warns', async () => {
+  it('drops a rescanned icon whose id collides with another live collection, warns, and names the owning collection', async () => {
     const col = makeCollection('admin', '/icons/admin')
     const updatedCol = makeCollection('admin', '/icons/admin', [
       { id: 'home', componentName: 'UseHome', absolutePath: '/icons/admin/home.svg' },
@@ -357,6 +358,7 @@ describe('createRebuildHandler', () => {
     const admin = ctx.collectionsRef.current.find(c => c.name === 'admin')!
     expect(admin.icons).toHaveLength(0)
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Symbol id collision'))
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('collection "default"'))
   })
 
   it('logs an error and does not throw when rebuildSingleCollection rejects', async () => {

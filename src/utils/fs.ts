@@ -31,6 +31,22 @@ const IGNORE_DIRS = IGNORE_DIR_NAMES.flatMap(d => [`${d}/**`, `**/${d}/**`])
 export type IsIgnored = (absPath: string) => boolean
 
 /**
+ * True when `dir` exists (any type — this module's callers only ever pass a
+ * directory path). Shared by `module.ts` (distinguishing a missing `inputDir` from
+ * an existing-but-empty one) and `utils/layers.ts`'s `resolveLayerInputDirs`
+ * (a layer's mirrored icon folder not existing is the normal case, not a warning).
+ */
+export async function dirExists(dir: string): Promise<boolean> {
+  try {
+    await fsp.access(dir)
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
+/**
  * Walks inputDir and groups .svg files by their collection (parent folder segments).
  * Returns one WalkerEntry per distinct collection; entries with no files are omitted.
  * Symlinks and node_modules/dist/build/coverage/test dirs are excluded.

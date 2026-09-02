@@ -4,5 +4,20 @@
     "dist",
     "node_modules",
     "playground",
+    // Each fixture under test/fixtures is its own throwaway Nuxt app with its own
+    // separate .nuxt/generated types (icon-names.d.ts, components.d.ts, ...) — but
+    // the root tsconfig's #build/* alias (above, via .nuxt/tsconfig.json) points at
+    // THIS project's own .nuxt, shared across the whole program. A fixture's
+    // <SvgUse name="..."> was therefore being type-checked against the ROOT
+    // project's own AllIconName, not its own — which happened to "work" only by
+    // coincidence (this project's own .nuxt/nuxt-svgo-sprite/icon-names.d.ts was
+    // stale from an earlier run and never got overwritten, since a missing inputDir
+    // used to bail out of setup() before writing it at all). Fixed properly by N2
+    // (ADR-030): the root project's own AllIconName is now correctly `never`
+    // (this repo genuinely has no assets/icons/ of its own) — which surfaced the
+    // pre-existing fragility rather than caused it. Fixtures are exercised for real
+    // via e2e tests (real nuxt dev/build against each fixture's OWN generated
+    // types), not via this root-level type-check.
+    "test/fixtures",
   ]
 }
