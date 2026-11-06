@@ -12,13 +12,21 @@ import {
 import type { SpriteCollection } from '../../src/types/types'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Nuxt } from '@nuxt/schema'
-import { addCustomTab } from '@nuxt/devtools-kit'
+import { onDevtoolsReady } from '@nuxt/devtools-kit'
 
 vi.mock('@nuxt/devtools-kit', () => ({
-  addCustomTab: vi.fn(),
-  extendServerRpc: vi.fn(),
-  onDevToolsInitialized: vi.fn(),
+  onDevtoolsReady: vi.fn(),
+  NUXT_DEVTOOLS_GROUP_ID: 'nuxt',
 }))
+
+/** Minimal fake of the onDevtoolsReady callback's ctx — just docks + scope(...).rpc. */
+function makeFakeCtx() {
+  const docksRegister = vi.fn()
+  const rpcRegister = vi.fn()
+  const rpcBroadcast = vi.fn()
+  const scope = vi.fn(() => ({ rpc: { register: rpcRegister, broadcast: rpcBroadcast } }))
+  return { ctx: { docks: { register: docksRegister }, scope }, docksRegister, rpcRegister, rpcBroadcast, scope }
+}
 
 function makeCollection(name: string, icons: { id: string, componentName: string, absolutePath: string }[]): SpriteCollection {
   return {
@@ -256,13 +264,50 @@ describe('setupDevtools', () => {
 
     setupDevtools(fakeNuxt, { current: [] }, new Set(), false)
 
-    expect(vi.mocked(addCustomTab)).toHaveBeenCalledWith(
-      expect.objectContaining({ view: { type: 'iframe', src: '/my-app/__nuxt-svgo-sprite' } }),
+    const { ctx, docksRegister } = makeFakeCtx()
+    vi.mocked(onDevtoolsReady).mock.calls[0]![0](ctx as never)
+    expect(docksRegister).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'iframe', url: '/my-app/__nuxt-svgo-sprite' }),
     )
 
     const use = vi.fn()
     handlers[0]!({ middlewares: { use } }, { isClient: true, isServer: false })
     expect(use).toHaveBeenCalledWith('/my-app/__nuxt-svgo-sprite', expect.any(Function))
+  })
+
+  it('registers the dock entry with id/title/icon/groupId, and the RPC function scoped to the module namespace', () => {
+    const fakeNuxt = { options: { app: { baseURL: '/' } }, hook: vi.fn() } as unknown as Nuxt
+    setupDevtools(fakeNuxt, { current: [] }, new Set(), false)
+
+    const { ctx, docksRegister, scope, rpcRegister } = makeFakeCtx()
+    vi.mocked(onDevtoolsReady).mock.calls[0]![0](ctx as never)
+
+    expect(docksRegister).toHaveBeenCalledWith({
+      id: 'nuxt-svgo-sprite',
+      title: 'SVG Sprite',
+      icon: 'carbon:svg',
+      type: 'iframe',
+      url: '/__nuxt-svgo-sprite',
+      groupId: 'nuxt',
+    })
+    expect(scope).toHaveBeenCalledWith('nuxt-svgo-sprite')
+    expect(rpcRegister).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'get-collections', type: 'query', handler: expect.any(Function) }),
+    )
+  })
+
+  it('broadcastRefresh is a safe no-op before onDevtoolsReady has fired, and calls rpc.broadcast after', async () => {
+    const fakeNuxt = { options: { app: { baseURL: '/' } }, hook: vi.fn() } as unknown as Nuxt
+    const broadcastRefresh = setupDevtools(fakeNuxt, { current: [] }, new Set(), false)
+
+    // DevTools never connected in this test run — must not throw.
+    await expect(broadcastRefresh()).resolves.toBeUndefined()
+
+    const { ctx, rpcBroadcast } = makeFakeCtx()
+    vi.mocked(onDevtoolsReady).mock.calls[0]![0](ctx as never)
+
+    await broadcastRefresh()
+    expect(rpcBroadcast).toHaveBeenCalledWith({ method: 'refresh', args: [], event: true })
   })
 })
 

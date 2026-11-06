@@ -10,11 +10,3 @@ export interface CollectionDTO {
   iconCount: number
   injected: boolean
 }
-
-export interface ServerFunctions {
-  getCollections(): CollectionDTO[]
-}
-
-export interface ClientFunctions {
-  refresh(): void
-}

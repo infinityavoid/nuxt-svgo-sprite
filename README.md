@@ -353,6 +353,27 @@ svgoConfig: {
 
 svg-sprite-specific keys (`mode`, `svg.rootAttributes`, `shape.*`) have no v3 equivalent — these are handled internally.
 
+## Benchmarks
+
+An independent benchmark compared this module against `nuxt-svgo` and `@nuxt/icon` on a
+synthetic SSR Nuxt app across several icon-usage patterns. Numbers below are from one
+run under specific conditions (single machine, synthetic icon set, no network
+emulation) — directional, not a guarantee for your own project.
+
+With 20 distinct icons used once each, SSR HTML and traffic were close across all three
+(within ~1-3 KB); the gap widens with scale:
+
+| | HTML (raw) | Traffic (Brotli) | Client JS |
+|---|---|---|---|
+| This module | smallest, flat per repeated icon | smallest in every scenario tested | icons never reach client JS |
+| `nuxt-svgo` | grows linearly per instance | +icon data shipped in both HTML and JS | +icon components per unique icon used |
+| `@nuxt/icon` | depends on mode | +~14 KB flat (server/scan) to +~100 KB (client, whole collection) | always ships a runtime component |
+
+The main place this module doesn't automatically win: a sprite is built from every icon
+found across the *whole app*, not just the current page, so a page using only a few
+icons from a large shared set can ship more than that page strictly needs — see
+[Tree-shaking unused icons](#tree-shaking-unused-icons) for production builds.
+
 ## Development
 
 ```bash
