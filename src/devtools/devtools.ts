@@ -1,10 +1,9 @@
 import { promises as fsp } from 'node:fs'
-import { addCustomTab, extendServerRpc, onDevToolsInitialized } from '@nuxt/devtools-kit'
-import type { BirpcGroup } from 'birpc'
+import { NUXT_DEVTOOLS_GROUP_ID, onDevtoolsReady } from '@nuxt/devtools-kit'
 import type { Nuxt } from '@nuxt/schema'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SpriteCollection } from '../types/types'
-import type { ClientFunctions, CollectionDTO, ServerFunctions } from './types'
+import type { CollectionDTO } from './types'
 
 /**
  * Projects internal SpriteCollection[] to the serializable DTO used by DevTools.
@@ -225,6 +224,13 @@ function clientHtml(routePath: string): string {
       }).join('');
     }
 
+    // extendClientRpc has no ES-module replacement reachable from here: this is a
+    // plain inline <script> with no bundler, so it can't "import" the recommended
+    // onDevtoolsReady from '@nuxt/devtools-kit/iframe-client' (a bare package
+    // specifier a browser can't resolve on its own). extendClientRpc itself carries
+    // only a JSDoc @deprecated tag — no NDT_DEP_xxxx diagnostic/console warning like
+    // addCustomTab/extendServerRpc have — so it's left as-is rather than hand-rolling
+    // a readiness-polling replacement for a warning that doesn't actually fire.
     connectDevtools(function(client) {
       rpc = client.devtools.extendClientRpc('NUXT_SVGO_SPRITE', {
         refresh: function() {
@@ -299,7 +305,7 @@ export function setupDevtools(
   injectedCollectionNames: Set<string>,
   createUseComponents: boolean,
 ): () => Promise<void> {
-  let rpc: BirpcGroup<ClientFunctions, ServerFunctions> | undefined
+  let broadcastRefresh: (() => Promise<void>) | undefined
 
   // Computed once and reused for the tab iframe src, the middleware mount path, and
   // (embedded into clientHtml) the client's own preview-image URLs — all three MUST
@@ -307,21 +313,30 @@ export function setupDevtools(
   // join-and-collapse-slashes pattern @nuxt/devtools itself uses for its own routes.
   const routePath = resolveDevtoolsRoute(nuxt, '/__nuxt-svgo-sprite')
 
-  addCustomTab({
-    name: 'nuxt-svgo-sprite',
-    title: 'SVG Sprite',
-    icon: 'carbon:svg',
-    view: { type: 'iframe', src: routePath },
-  })
+  // addCustomTab/extendServerRpc/onDevToolsInitialized are devtools-kit v3 APIs,
+  // soft-deprecated (NDT_DEP_0005/NDT_DEP_0003) in v4 — still shimmed today but
+  // scheduled for removal in v5. onDevtoolsReady is their single v4 replacement for
+  // BOTH: ctx.docks/ctx.scope(...).rpc are only reachable through its callback, so
+  // the dock registration and the RPC registration (previously two separate
+  // top-level calls) now both live inside this one callback.
+  onDevtoolsReady((ctx) => {
+    ctx.docks.register({
+      id: 'nuxt-svgo-sprite',
+      title: 'SVG Sprite',
+      icon: 'carbon:svg',
+      type: 'iframe',
+      url: routePath,
+      groupId: NUXT_DEVTOOLS_GROUP_ID,
+    })
 
-  onDevToolsInitialized(() => {
-    rpc = extendServerRpc<ClientFunctions, ServerFunctions>(
-      'NUXT_SVGO_SPRITE',
-      {
-        getCollections: () =>
-          projectCollections(collectionsRef.current, injectedCollectionNames, createUseComponents),
-      },
-    )
+    const { rpc } = ctx.scope('nuxt-svgo-sprite')
+    rpc.register({
+      name: 'get-collections',
+      type: 'query',
+      handler: (): CollectionDTO[] =>
+        projectCollections(collectionsRef.current, injectedCollectionNames, createUseComponents),
+    })
+    broadcastRefresh = () => rpc.broadcast({ method: 'refresh', args: [], event: true })
   })
 
   nuxt.hook('vite:serverCreated', (viteServer, { isClient }) => {
@@ -335,6 +350,6 @@ export function setupDevtools(
   })
 
   return async () => {
-    await rpc?.broadcast.refresh.asEvent()
+    await broadcastRefresh?.()
   }
 }
