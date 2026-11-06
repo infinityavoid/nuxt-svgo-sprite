@@ -1,6 +1,22 @@
 # Changelog
 
 
+## v3.2.0...v3.2.1
+
+[compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v3.2.0...v3.2.1)
+
+### 🩹 Fixes
+
+- Migrate DevTools integration off deprecated devtools-kit v3 APIs ([440263e](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/440263e))
+
+### 📖 Documentation
+
+- Add a benchmarks section comparing against other icon approaches ([e73c9b8](https://github.com/infinityavoid/nuxt-svgo-sprite/commit/e73c9b8))
+
+### ❤️ Contributors
+
+- Anton Ustinov <Anton.ustinov02@mail.ru>
+
 ## v3.1.1...3.2.0
 
 [compare changes](https://github.com/infinityavoid/nuxt-svgo-sprite/compare/v3.1.1...v3.2.0)
